@@ -1,0 +1,15 @@
+cat << 'EOF' > .gitignore
+# Dependencies
+node_modules/
+contracts/lib/
+
+# Build & cache
+dist/
+build/
+contracts/out/
+contracts/cache/
+
+# Environment variables & secrets
+.env
+.env.local
+EOF
