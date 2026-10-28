@@ -49,11 +49,12 @@
   --bad: #9b2020;
   --bad-line: #f0a3a3;
 
-  --font-body: "IBM Plex Sans", system-ui, -apple-system, "Segoe UI", Roboto,
+  --font-body:
+    "IBM Plex Sans", system-ui, -apple-system, "Segoe UI", Roboto,
     "Helvetica Neue", Arial, sans-serif;
   --font-display: "Newsreader", Georgia, "Times New Roman", serif;
-  --font-mono: "IBM Plex Mono", ui-monospace, SFMono-Regular, Menlo, Consolas,
-    monospace;
+  --font-mono:
+    "IBM Plex Mono", ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
 }
 
 /* ---------- Dark theme ---------- */
@@ -282,6 +283,19 @@ a {
   font-size: 0.8rem;
 }
 
+.wallet-pill {
+  color: var(--ink);
+  cursor: pointer;
+  transition:
+    background 0.15s,
+    border-color 0.15s;
+}
+
+.wallet-pill:hover {
+  background: var(--surface);
+  border-color: var(--line-hover);
+}
+
 .wallet-pill::before {
   content: "";
   width: 8px;
@@ -470,7 +484,9 @@ a {
   color: var(--ink);
   font-size: 0.95rem;
   line-height: 1.4;
-  transition: border-color 0.15s, box-shadow 0.15s;
+  transition:
+    border-color 0.15s,
+    box-shadow 0.15s;
 }
 
 .field select {
@@ -546,7 +562,9 @@ a {
   line-height: 1.2;
   text-decoration: none;
   white-space: nowrap;
-  transition: background 0.15s, border-color 0.15s;
+  transition:
+    background 0.15s,
+    border-color 0.15s;
 }
 
 .btn:hover:not(:disabled) {

@@ -106,6 +106,10 @@ function shortAddr(a: string, head = 6, tail = 4) {
   return `${a.slice(0, head)}...${a.slice(-tail)}`;
 }
 
+function sameAddress(a?: string | null, b?: string | null) {
+  return !!a && !!b && a.toLowerCase() === b.toLowerCase();
+}
+
 function ToneIcon({ tone, size = 24 }: { tone: Tone; size?: number }) {
   const common = {
     width: size,
@@ -353,9 +357,14 @@ function Header({
         <div className="topbar-actions">
           {!isVerifierPage &&
             (walletAddress ? (
-              <span className="wallet-pill" title={walletAddress}>
+              <button
+                type="button"
+                className="wallet-pill"
+                onClick={connectWallet}
+                title={`${walletAddress}. Click to switch MetaMask account`}
+              >
                 {shortAddr(walletAddress)}
-              </span>
+              </button>
             ) : (
               <button className="btn btn-sm" onClick={connectWallet}>
                 Connect MetaMask
@@ -408,6 +417,12 @@ function RegisterPage({
   } | null>(null);
   const [loading, setLoading] = useState(false);
 
+  const selectedInst = institutions.find((i) => i.code === selectedCode);
+  const boundToOther =
+    !!walletAddress &&
+    !!selectedInst?.wallet_address &&
+    !sameAddress(walletAddress, selectedInst.wallet_address);
+
   useEffect(() => {
     if (
       institutions.length > 0 &&
@@ -425,6 +440,14 @@ function RegisterPage({
       setStatusMsg({
         type: "err",
         text: "Please connect your Registrar MetaMask wallet first.",
+      });
+      return;
+    }
+
+    if (boundToOther) {
+      setStatusMsg({
+        type: "err",
+        text: `${selectedCode} is already bound to another wallet. Switch to that account to continue.`,
       });
       return;
     }
@@ -509,7 +532,7 @@ function RegisterPage({
                 <button
                   type="submit"
                   className="btn btn-blue"
-                  disabled={loading ? true : institutions.length === 0}
+                  disabled={loading ? true : institutions.length === 0 || boundToOther}
                 >
                   {loading && <Spinner />}
                   {loading
@@ -519,6 +542,17 @@ function RegisterPage({
               )}
             </div>
           </form>
+
+          {boundToOther && selectedInst?.wallet_address && (
+            <Notice tone="warn" title="Wallet mismatch.">
+              {selectedCode} is bound to{" "}
+              <span className="mono">
+                {shortAddr(selectedInst.wallet_address, 8, 6)}
+              </span>
+              . Click your wallet pill in the top bar to switch to that
+              account.
+            </Notice>
+          )}
 
           {statusMsg && (
             <Notice tone={statusMsg.type === "ok" ? "ok" : "bad"}>
@@ -570,12 +604,18 @@ function RegisterPage({
                     <td>
                       {i.accreditation_status === "ACCREDITED" &&
                       i.wallet_address ? (
-                        <Link
-                          to={`/${i.code}/issue_degree`}
-                          className="btn btn-ghost btn-sm"
-                        >
-                          Open portal
-                        </Link>
+                        sameAddress(walletAddress, i.wallet_address) ? (
+                          <Link
+                            to={`/${i.code}/issue_degree`}
+                            className="btn btn-ghost btn-sm"
+                          >
+                            Open portal
+                          </Link>
+                        ) : (
+                          <span className="muted">
+                            Switch to this wallet to open
+                          </span>
+                        )
                       ) : (
                         <span className="muted">
                           {i.accreditation_status === "UNACCREDITED"
@@ -607,10 +647,12 @@ function RegisterPage({
 function IssueDegreePage({
   institutions,
   walletAddress,
+  connectWallet,
   contractAddress,
 }: {
   institutions: Institution[];
   walletAddress: string;
+  connectWallet: () => Promise<void>;
   contractAddress: string;
 }) {
   const { university } = useParams<{ university: string }>();
@@ -618,6 +660,9 @@ function IssueDegreePage({
   const uniCode = (university ?? "UNIVA").toUpperCase();
 
   const currentInst = institutions.find((i) => i.code === uniCode);
+  // Only the wallet bound to this institution may use its portal
+  const boundWallet = currentInst?.wallet_address ?? null;
+  const isOwner = sameAddress(walletAddress, boundWallet);
 
   const [issueForm, setIssueForm] = useState({
     credentialId: "",
@@ -644,8 +689,15 @@ function IssueDegreePage({
   const [revokeMsg, setRevokeMsg] = useState<string | null>(null);
 
   useEffect(() => {
-    fetchUniversityCredentials();
-  }, [uniCode]);
+    if (isOwner) {
+      fetchUniversityCredentials();
+    } else {
+      // Never keep another institution's data on screen after an account switch
+      setCredentials([]);
+      setIssuedResult(null);
+      setRevokeMsg(null);
+    }
+  }, [uniCode, isOwner]);
 
   async function fetchUniversityCredentials() {
     try {
@@ -662,6 +714,13 @@ function IssueDegreePage({
     e.preventDefault();
     setIssueError(null);
     setIssuedResult(null);
+
+    if (!isOwner) {
+      setIssueError(
+        "The connected wallet is not the registrar wallet for this institution.",
+      );
+      return;
+    }
 
     if (!walletAddress) {
       setIssueError(
@@ -722,6 +781,12 @@ function IssueDegreePage({
     referenceCode: string,
   ) {
     setRevokeMsg(null);
+    if (!isOwner) {
+      setRevokeMsg(
+        "Revocation error: the connected wallet is not the registrar wallet for this institution.",
+      );
+      return;
+    }
     if (!walletAddress) {
       alert(
         "Connect your MetaMask wallet first to sign the revocation transaction.",
@@ -765,6 +830,98 @@ function IssueDegreePage({
           <Link to="/register" className="btn">
             Return to onboarding
           </Link>
+        </section>
+      </>
+    );
+  }
+
+  if (!currentInst) {
+    return (
+      <>
+        <BackLink to="/register">Back to institution onboarding</BackLink>
+        <section className="panel">
+          <h2 className="panel-title">
+            {institutions.length === 0
+              ? "Loading institution"
+              : `Unknown institution: ${uniCode}`}
+          </h2>
+          <p className="panel-text">
+            {institutions.length === 0
+              ? "Waiting for the institution registry to load."
+              : "This code is not in the institution registry."}
+          </p>
+        </section>
+      </>
+    );
+  }
+
+  if (!boundWallet) {
+    return (
+      <>
+        <BackLink to="/register">Back to institution onboarding</BackLink>
+        <section className="panel">
+          <h2 className="panel-title">No registrar wallet bound to {uniCode}</h2>
+          <p className="panel-text">
+            Bind a wallet on the onboarding page before opening this portal.
+          </p>
+          <Link to="/register" className="btn">
+            Go to onboarding
+          </Link>
+        </section>
+      </>
+    );
+  }
+
+  if (!walletAddress) {
+    return (
+      <>
+        <BackLink to="/register">Back to institution onboarding</BackLink>
+        <section className="panel">
+          <h2 className="panel-title">Connect the {uniCode} wallet</h2>
+          <p className="panel-text">
+            This portal opens only for the registrar wallet bound to{" "}
+            {currentInst.name}. Connect MetaMask with that account to continue.
+          </p>
+          <button type="button" className="btn btn-blue" onClick={connectWallet}>
+            Connect MetaMask
+          </button>
+        </section>
+      </>
+    );
+  }
+
+  if (!isOwner) {
+    return (
+      <>
+        <BackLink to="/register">Back to institution onboarding</BackLink>
+        <section className="panel">
+          <h2 className="panel-title">Wrong account for {uniCode}</h2>
+          <p className="panel-text">
+            The {currentInst.name} portal is limited to its registrar wallet.
+            Switch MetaMask to that account to continue.
+          </p>
+          <dl className="facts">
+            <div className="fact">
+              <dt>Connected wallet</dt>
+              <dd className="mono">{walletAddress}</dd>
+            </div>
+            <div className="fact">
+              <dt>Required wallet</dt>
+              <dd className="mono">{boundWallet}</dd>
+            </div>
+          </dl>
+          <div className="form-actions">
+            <button
+              type="button"
+              className="btn btn-blue"
+              onClick={connectWallet}
+            >
+              Switch account
+            </button>
+            <Link to="/register" className="btn btn-ghost">
+              Back to onboarding
+            </Link>
+          </div>
         </section>
       </>
     );
@@ -1467,6 +1624,19 @@ export default function App() {
   useEffect(() => {
     fetchHealthAndInstitutions();
     checkAlreadyConnectedWallet();
+
+    const ethereum = (window as any).ethereum;
+    if (ethereum && ethereum.on) {
+      const handleAccountsChanged = (accounts: string[]) => {
+        setWalletAddress(accounts && accounts.length > 0 ? accounts[0] : "");
+      };
+      ethereum.on("accountsChanged", handleAccountsChanged);
+      return () => {
+        if (ethereum.removeListener) {
+          ethereum.removeListener("accountsChanged", handleAccountsChanged);
+        }
+      };
+    }
   }, []);
 
   async function checkAlreadyConnectedWallet() {
@@ -1516,6 +1686,13 @@ export default function App() {
       return;
     }
     try {
+      // If already connected, prompt MetaMask's account picker so the user can switch universities
+      if (walletAddress) {
+        await ethereum.request({
+          method: "wallet_requestPermissions",
+          params: [{ eth_accounts: {} }],
+        });
+      }
       const accounts = await ethereum.request({
         method: "eth_requestAccounts",
       });
@@ -1562,6 +1739,7 @@ export default function App() {
                 <IssueDegreePage
                   institutions={institutions}
                   walletAddress={walletAddress}
+                  connectWallet={connectWallet}
                   contractAddress={contractAddress}
                 />
               }

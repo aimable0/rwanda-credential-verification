@@ -50,9 +50,12 @@ app.post("/api/institutions/register", async (req: Request, res: Response) => {
         .json({ error: "code and walletAddress are required" });
     }
 
+    const normalizedCode = code.trim().toUpperCase();
+    const normalizedWallet = walletAddress.trim();
+
     const instResult = await query(
       "SELECT * FROM institutions WHERE code = $1",
-      [code.trim().toUpperCase()],
+      [normalizedCode],
     );
 
     if (instResult.rows.length === 0) {
@@ -70,13 +73,26 @@ app.post("/api/institutions/register", async (req: Request, res: Response) => {
       });
     }
 
+    // Check if this wallet address is already bound to a DIFFERENT institution
+    const existingWalletOwner = await query(
+      "SELECT code, name FROM institutions WHERE LOWER(wallet_address) = LOWER($1) AND code != $2",
+      [normalizedWallet, normalizedCode],
+    );
+
+    if (existingWalletOwner.rows.length > 0) {
+      const other = existingWalletOwner.rows[0];
+      return res.status(409).json({
+        error: `This MetaMask wallet (${normalizedWallet.slice(0, 8)}...) is already bound to ${other.name} (${other.code}). Please switch to a second account in MetaMask to represent ${institution.name} (${institution.code}).`,
+      });
+    }
+
     const updated = await query(
       "UPDATE institutions SET wallet_address = $1 WHERE institution_id = $2 RETURNING *",
-      [walletAddress.trim(), institution.institution_id],
+      [normalizedWallet, institution.institution_id],
     );
 
     res.json({
-      message: "Institution accredited and wallet registered successfully",
+      message: `${institution.name} (${institution.code}) accredited and bound to wallet ${normalizedWallet.slice(0, 8)}...`,
       institution: updated.rows[0],
     });
   } catch (err: any) {
