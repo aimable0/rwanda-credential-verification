@@ -66,15 +66,169 @@ interface VerificationLogRow {
   response_time_ms: number;
 }
 
-// Context-aware Header: Completely hides internal tabs when on the public /verify page
+/* ---------- Presentation helpers ---------- */
+
+type Tone = "ok" | "warn" | "bad";
+
+function outcomeMeta(result: string): {
+  tone: Tone;
+  title: string;
+  text: string;
+} {
+  switch (result) {
+    case "GENUINE_AND_ACTIVE":
+      return {
+        tone: "ok",
+        title: "Genuine and active",
+        text: "The details you entered match the record anchored on-chain.",
+      };
+    case "GENUINE_BUT_REVOKED":
+      return {
+        tone: "warn",
+        title: "Genuine but revoked",
+        text: "The details match, but the issuing institution has revoked this credential.",
+      };
+    default:
+      return {
+        tone: "bad",
+        title: "Mismatch or not found",
+        text: "No on-chain record matches these details. Check each field against the certificate.",
+      };
+  }
+}
+
+function sentence(s: string) {
+  const t = s.replace(/_/g, " ").toLowerCase();
+  return t.charAt(0).toUpperCase() + t.slice(1);
+}
+
+function shortAddr(a: string, head = 6, tail = 4) {
+  return `${a.slice(0, head)}...${a.slice(-tail)}`;
+}
+
+function ToneIcon({ tone, size = 24 }: { tone: Tone; size?: number }) {
+  const common = {
+    width: size,
+    height: size,
+    viewBox: "0 0 24 24",
+    fill: "none",
+    stroke: "currentColor",
+    strokeWidth: 2.2,
+    strokeLinecap: "round" as const,
+    strokeLinejoin: "round" as const,
+    "aria-hidden": true,
+  };
+  if (tone === "ok")
+    return (
+      <svg {...common}>
+        <path d="M5 12.5l4.5 4.5L19 7.5" />
+      </svg>
+    );
+  if (tone === "warn")
+    return (
+      <svg {...common}>
+        <path d="M12 7v6M12 17h.01" />
+      </svg>
+    );
+  return (
+    <svg {...common}>
+      <path d="M7 7l10 10M17 7L7 17" />
+    </svg>
+  );
+}
+
+function BrandMark() {
+  return (
+    <svg
+      className="brand-mark"
+      width="38"
+      height="38"
+      viewBox="0 0 38 38"
+      fill="none"
+      aria-hidden="true"
+    >
+      <circle cx="19" cy="19" r="17.5" fill="#0e2a47" />
+      <circle cx="19" cy="19" r="14" stroke="#d9a400" strokeWidth="1.5" />
+      <path
+        d="M12.5 19.5l4.2 4.2 8.8-9.2"
+        stroke="#fff"
+        strokeWidth="2.4"
+        strokeLinecap="round"
+        strokeLinejoin="round"
+      />
+    </svg>
+  );
+}
+
+function Spinner() {
+  return <span className="spinner" aria-hidden="true" />;
+}
+
+function PageHead({
+  title,
+  children,
+}: {
+  title: string;
+  children?: React.ReactNode;
+}) {
+  return (
+    <div className="page-head">
+      <h1>{title}</h1>
+      {children && <p>{children}</p>}
+    </div>
+  );
+}
+
+function Notice({
+  tone,
+  title,
+  children,
+}: {
+  tone: Tone;
+  title?: string;
+  children: React.ReactNode;
+}) {
+  return (
+    <div
+      className={`notice tone-${tone}`}
+      role={tone === "bad" ? "alert" : "status"}
+    >
+      {title && <strong>{title}</strong>}
+      {children}
+    </div>
+  );
+}
+
+function BackLink({ to, children }: { to: string; children: React.ReactNode }) {
+  return (
+    <Link to={to} className="back-link">
+      <svg
+        width="14"
+        height="14"
+        viewBox="0 0 24 24"
+        fill="none"
+        stroke="currentColor"
+        strokeWidth="2.4"
+        strokeLinecap="round"
+        strokeLinejoin="round"
+        aria-hidden="true"
+      >
+        <path d="M15 5l-7 7 7 7" />
+      </svg>
+      {children}
+    </Link>
+  );
+}
+
+/* ---------- Top bar and footer ---------- */
+
+// Context-aware header: hides internal navigation on the public /verify page
 function Header({
   walletAddress,
   connectWallet,
-  contractAddress,
 }: {
   walletAddress: string;
   connectWallet: () => Promise<void>;
-  contractAddress: string;
 }) {
   const location = useLocation();
   const isVerifierPage = location.pathname.startsWith("/verify");
@@ -84,58 +238,75 @@ function Header({
       : location.pathname.includes("/issue_degree");
 
   return (
-    <>
-      <header className="app-header">
-        <div>
-          <h1>Rwanda Blockchain Credential Verification Platform</h1>
-          <p>
-            Zero-Storage, Single-Issuer Hash-Anchoring on Ethereum Sepolia (
-            <span className="mono">{contractAddress}</span>)
-          </p>
-        </div>
+    <header className="topbar">
+      <div className="topbar-inner">
+        <Link to="/register" className="brand">
+          <BrandMark />
+          <span>
+            <span className="brand-name">Rwanda Credential Verification</span>
+            <span className="brand-sub">Anchored on Ethereum Sepolia</span>
+          </span>
+        </Link>
+
         {!isVerifierPage && (
-          <div>
+          <nav className="nav" aria-label="Main">
+            <Link
+              to="/register"
+              className={`nav-link ${isPortalActive ? "active" : ""}`}
+            >
+              Institution portal
+            </Link>
+            <Link
+              to="/verify"
+              className={`nav-link ${isVerifierPage ? "active" : ""}`}
+            >
+              Public verifier
+            </Link>
+            <Link
+              to="/logs"
+              className={`nav-link ${location.pathname.startsWith("/logs") ? "active" : ""}`}
+            >
+              Evaluation logs
+            </Link>
+          </nav>
+        )}
+
+        {!isVerifierPage && (
+          <div className="topbar-actions">
             {walletAddress ? (
-              <span className="badge badge-green mono">
-                Wallet: {walletAddress.slice(0, 6)}...{walletAddress.slice(-4)}
+              <span className="wallet-pill" title={walletAddress}>
+                {shortAddr(walletAddress)}
               </span>
             ) : (
-              <button className="btn btn-outline" onClick={connectWallet}>
-                Connect Registrar MetaMask
+              <button className="btn btn-sm" onClick={connectWallet}>
+                Connect MetaMask
               </button>
             )}
           </div>
         )}
-      </header>
-
-      {!isVerifierPage && (
-        <nav className="nav-tabs">
-          <Link
-            to="/register"
-            className={`tab-btn ${isPortalActive ? "active" : ""}`}
-            style={{ textDecoration: "none" }}
-          >
-            Institution Portal (/register)
-          </Link>
-          <Link
-            to="/verify"
-            className={`tab-btn ${location.pathname.startsWith("/verify") ? "active" : ""}`}
-            style={{ textDecoration: "none" }}
-          >
-            Public Verifier (/verify)
-          </Link>
-          <Link
-            to="/logs"
-            className={`tab-btn ${location.pathname.startsWith("/logs") ? "active" : ""}`}
-            style={{ textDecoration: "none" }}
-          >
-            Evaluation Logs (/logs)
-          </Link>
-        </nav>
-      )}
-    </>
+      </div>
+    </header>
   );
 }
+
+function Footer({ contractAddress }: { contractAddress: string }) {
+  return (
+    <footer className="footer">
+      <div className="footer-inner">
+        <span>Registry contract on Sepolia</span>
+        <a
+          href={`https://sepolia.etherscan.io/address/${contractAddress}`}
+          target="_blank"
+          rel="noreferrer"
+        >
+          {contractAddress}
+        </a>
+      </div>
+    </footer>
+  );
+}
+
+/* ---------- Register ---------- */
 
 function RegisterPage({
   institutions,
@@ -210,139 +381,149 @@ function RegisterPage({
   }
 
   return (
-    <div className="card">
-      <h2>
-        Institution Onboarding
-        (/register)[span_10](start_span)[span_10](end_span)[span_11](start_span)[span_11](end_span)
-      </h2>
-      <p style={{ fontSize: "0.9rem", color: "#4a5568" }}>
-        Gated against simulated HEC / NCNM accreditation
-        records[span_12](start_span)[span_12](end_span)[span_13](start_span)[span_13](end_span).
-        Only accredited institutions can bind a registrar wallet and access{" "}
-        <code>/[university]/issue_degree</code>
-        [span_14](start_span)[span_14](end_span)[span_15](start_span)[span_15](end_span).
-      </p>
+    <>
+      <PageHead title="Institution onboarding">
+        Institutions are checked against simulated HEC and NCNM accreditation
+        records. Only accredited institutions can bind a registrar wallet and
+        open their issuing portal.
+      </PageHead>
 
       {backendError && (
-        <div
-          className="outcome-banner outcome-MISMATCH_OR_NOT_FOUND"
-          style={{ marginBottom: 16 }}
-        >
-          <strong>Backend Connection Issue:</strong> {backendError}
-        </div>
+        <Notice tone="bad" title="Backend connection issue.">
+          {backendError}
+        </Notice>
       )}
 
-      <form onSubmit={handleRegister}>
-        <div className="form-group">
-          <label>Select Institution (Simulated HEC/NCNM Registry)</label>
-          <select
-            value={selectedCode}
-            onChange={(e) => setSelectedCode(e.target.value)}
-          >
-            {institutions.map((inst) => (
-              <option key={inst.code} value={inst.code}>
-                {inst.code} — {inst.name} [{inst.accreditation_status}]
-              </option>
-            ))}
-          </select>
-        </div>
+      <div className="stack">
+        <section className="panel">
+          <h2 className="panel-title">Bind your registrar wallet</h2>
+          <p className="panel-text">
+            Choose your institution, connect MetaMask, then confirm
+            accreditation.
+          </p>
 
-        <div style={{ display: "flex", gap: "12px", alignItems: "center" }}>
-          {!walletAddress ? (
-            <button type="button" className="btn" onClick={connectWallet}>
-              1. Connect MetaMask Wallet
-            </button>
-          ) : (
-            <button
-              type="submit"
-              className="btn"
-              disabled={loading ? true : institutions.length === 0}
-            >
-              {loading
-                ? "Checking Accreditation..."
-                : `Verify Accreditation & Enter /${selectedCode}/issue_degree`}
-            </button>
+          <form onSubmit={handleRegister}>
+            <div className="inline-form">
+              <label className="field">
+                <span className="field-label">Institution</span>
+                <select
+                  value={selectedCode}
+                  onChange={(e) => setSelectedCode(e.target.value)}
+                >
+                  {institutions.map((inst) => (
+                    <option key={inst.code} value={inst.code}>
+                      {inst.code} - {inst.name} ({inst.accreditation_status})
+                    </option>
+                  ))}
+                </select>
+              </label>
+
+              {!walletAddress ? (
+                <button
+                  type="button"
+                  className="btn btn-blue"
+                  onClick={connectWallet}
+                >
+                  Connect MetaMask wallet
+                </button>
+              ) : (
+                <button
+                  type="submit"
+                  className="btn btn-blue"
+                  disabled={loading ? true : institutions.length === 0}
+                >
+                  {loading && <Spinner />}
+                  {loading
+                    ? "Checking accreditation"
+                    : "Verify accreditation and continue"}
+                </button>
+              )}
+            </div>
+          </form>
+
+          {statusMsg && (
+            <Notice tone={statusMsg.type === "ok" ? "ok" : "bad"}>
+              {statusMsg.text}
+            </Notice>
           )}
-        </div>
-      </form>
+        </section>
 
-      {statusMsg && (
-        <div
-          className={`outcome-banner ${
-            statusMsg.type === "ok"
-              ? "outcome-GENUINE_AND_ACTIVE"
-              : "outcome-MISMATCH_OR_NOT_FOUND"
-          }`}
-        >
-          <strong>{statusMsg.text}</strong>
-        </div>
-      )}
-
-      <div style={{ marginTop: "24px" }}>
-        <h3>Registered Institutions & Direct Portals</h3>
-        <table>
-          <thead>
-            <tr>
-              <th>Code</th>
-              <th>Institution Name</th>
-              <th>Accreditation Status</th>
-              <th>Bound Registrar Wallet</th>
-              <th>Portal Action</th>
-            </tr>
-          </thead>
-          <tbody>
-            {institutions.map((i) => (
-              <tr key={i.code}>
-                <td>
-                  <strong>{i.code}</strong>
-                </td>
-                <td>{i.name}</td>
-                <td>
-                  <span
-                    className={`badge ${
-                      i.accreditation_status === "ACCREDITED"
-                        ? "badge-green"
-                        : "badge-red"
-                    }`}
-                  >
-                    {i.accreditation_status}
-                  </span>
-                </td>
-                <td className="mono">
-                  {i.wallet_address
-                    ? `${i.wallet_address.slice(0, 8)}...${i.wallet_address.slice(-6)}`
-                    : "Not registered yet"}
-                </td>
-                <td>
-                  {i.accreditation_status === "ACCREDITED" &&
-                  i.wallet_address ? (
-                    <Link
-                      to={`/${i.code}/issue_degree`}
-                      className="btn"
-                      style={{
-                        textDecoration: "none",
-                        padding: "6px 12px",
-                        fontSize: "0.82rem",
-                      }}
-                    >
-                      Open /{i.code}/issue_degree →
-                    </Link>
-                  ) : (
-                    <span style={{ fontSize: "0.82rem", color: "#718096" }}>
-                      {i.accreditation_status === "UNACCREDITED"
-                        ? "Blocked (Unaccredited)"
-                        : "Bind wallet above first"}
-                    </span>
-                  )}
-                </td>
-              </tr>
-            ))}
-          </tbody>
-        </table>
+        <section className="panel">
+          <h2 className="panel-title">Registered institutions</h2>
+          <p className="panel-text">
+            Each accredited institution with a bound wallet has its own issuing
+            portal.
+          </p>
+          <div className="table-wrap">
+            <table>
+              <thead>
+                <tr>
+                  <th>Code</th>
+                  <th>Institution</th>
+                  <th>Accreditation</th>
+                  <th>Registrar wallet</th>
+                  <th>Portal</th>
+                </tr>
+              </thead>
+              <tbody>
+                {institutions.map((i) => (
+                  <tr key={i.code}>
+                    <td>
+                      <strong>{i.code}</strong>
+                    </td>
+                    <td>{i.name}</td>
+                    <td>
+                      <span
+                        className={`badge ${
+                          i.accreditation_status === "ACCREDITED"
+                            ? "tone-ok"
+                            : "tone-bad"
+                        }`}
+                      >
+                        {sentence(i.accreditation_status)}
+                      </span>
+                    </td>
+                    <td className="mono">
+                      {i.wallet_address
+                        ? shortAddr(i.wallet_address, 8, 6)
+                        : "Not registered yet"}
+                    </td>
+                    <td>
+                      {i.accreditation_status === "ACCREDITED" &&
+                      i.wallet_address ? (
+                        <Link
+                          to={`/${i.code}/issue_degree`}
+                          className="btn btn-ghost btn-sm"
+                        >
+                          Open portal
+                        </Link>
+                      ) : (
+                        <span className="muted">
+                          {i.accreditation_status === "UNACCREDITED"
+                            ? "Blocked, unaccredited"
+                            : "Bind a wallet first"}
+                        </span>
+                      )}
+                    </td>
+                  </tr>
+                ))}
+                {institutions.length === 0 && (
+                  <tr>
+                    <td colSpan={5} className="cell-empty">
+                      No institutions loaded yet.
+                    </td>
+                  </tr>
+                )}
+              </tbody>
+            </table>
+          </div>
+        </section>
       </div>
-    </div>
+    </>
   );
 }
+
+/* ---------- Issue degree ---------- */
 
 function IssueDegreePage({
   institutions,
@@ -494,267 +675,296 @@ function IssueDegreePage({
 
   if (currentInst && currentInst.accreditation_status !== "ACCREDITED") {
     return (
-      <div className="card">
-        <h2>Access Denied: {uniCode} is Unaccredited</h2>
-        <p>
-          {currentInst.name} ({uniCode}) is marked as{" "}
-          <strong>UNACCREDITED</strong> in the simulated HEC/NCNM registry and
-          cannot issue credentials.
-        </p>
-        <Link to="/register" className="btn" style={{ textDecoration: "none" }}>
-          ← Return to /register
-        </Link>
-      </div>
+      <>
+        <BackLink to="/register">Back to institution onboarding</BackLink>
+        <section className="panel">
+          <h2 className="panel-title">Access denied for {uniCode}</h2>
+          <p className="panel-text">
+            {currentInst.name} ({uniCode}) is marked as unaccredited in the
+            simulated HEC and NCNM registry, so it cannot issue credentials.
+          </p>
+          <Link to="/register" className="btn">
+            Return to onboarding
+          </Link>
+        </section>
+      </>
     );
   }
 
   return (
     <>
-      <div style={{ marginBottom: 16 }}>
-        <Link to="/register" style={{ color: "#2b6cb0", fontWeight: 600 }}>
-          ← Back to Institution Onboarding (/register)
-        </Link>
-      </div>
+      <BackLink to="/register">Back to institution onboarding</BackLink>
 
-      <div className="card">
-        <h2>
-          Issue & Anchor Degree for{" "}
-          {currentInst ? `${currentInst.name} (${uniCode})` : uniCode}
-        </h2>
-        <p style={{ fontSize: "0.88rem", color: "#4a5568" }}>
-          Route: <code>/{uniCode}/issue_degree</code>
-          [span_16](start_span)[span_16](end_span)[span_17](start_span)[span_17](end_span)
-          | Registered Wallet:{" "}
-          <span className="mono">
-            {currentInst?.wallet_address ?? "Not bound"}
-          </span>
-        </p>
+      <PageHead title="Issue a credential">
+        Issuing as {currentInst ? `${currentInst.name} (${uniCode})` : uniCode}.
+        Registered wallet:{" "}
+        <span className="mono">
+          {currentInst?.wallet_address ?? "Not bound"}
+        </span>
+      </PageHead>
 
-        <form onSubmit={handleIssueCredential}>
-          <div className="grid-2">
-            <div className="form-group">
-              <label>1. Issuing Institution Code (Locked to Route)</label>
-              <input type="text" value={uniCode} disabled />
-            </div>
+      <div className="stack">
+        <section className="panel">
+          <h2 className="panel-title">Certificate details</h2>
+          <p className="panel-text">
+            Enter the fields exactly as printed. They are salted and hashed, and
+            only the hash is written to the chain.
+          </p>
 
-            <div className="form-group">
-              <label>
-                2. Printed Certificate ID / Reference Code (Blank =
-                auto-generate)
+          <form onSubmit={handleIssueCredential}>
+            <div className="field-grid">
+              <label className="field">
+                <span className="field-label">Institution code</span>
+                <input type="text" value={uniCode} disabled />
+                <span className="field-hint">Set by the portal route.</span>
               </label>
-              <input
-                type="text"
-                placeholder="e.g. 220001624 or leave empty for RW-UNIVA-..."
-                value={issueForm.credentialId}
-                onChange={(e) =>
-                  setIssueForm({ ...issueForm, credentialId: e.target.value })
-                }
-              />
+
+              <label className="field">
+                <span className="field-label">Certificate ID</span>
+                <input
+                  type="text"
+                  placeholder="e.g. 220001624"
+                  value={issueForm.credentialId}
+                  onChange={(e) =>
+                    setIssueForm({ ...issueForm, credentialId: e.target.value })
+                  }
+                />
+                <span className="field-hint">
+                  Leave blank to auto-generate a reference code.
+                </span>
+              </label>
+
+              <label className="field">
+                <span className="field-label">Holder full name *</span>
+                <input
+                  type="text"
+                  required
+                  placeholder="e.g. DUKUNDIMANA DESIRE"
+                  value={issueForm.holderName}
+                  onChange={(e) =>
+                    setIssueForm({ ...issueForm, holderName: e.target.value })
+                  }
+                />
+              </label>
+
+              <label className="field">
+                <span className="field-label">Degree or license title *</span>
+                <input
+                  type="text"
+                  required
+                  placeholder="e.g. BACHELOR OF EDUCATION WITH HONOURS"
+                  value={issueForm.degreeTitle}
+                  onChange={(e) =>
+                    setIssueForm({ ...issueForm, degreeTitle: e.target.value })
+                  }
+                />
+              </label>
+
+              <label className="field span-2">
+                <span className="field-label">Programme or specialization</span>
+                <input
+                  type="text"
+                  placeholder="e.g. FOUNDATIONS OF EDUCATION AND ENGLISH"
+                  value={issueForm.programme}
+                  onChange={(e) =>
+                    setIssueForm({ ...issueForm, programme: e.target.value })
+                  }
+                />
+                <span className="field-hint">Optional.</span>
+              </label>
+
+              <label className="field">
+                <span className="field-label">Classification *</span>
+                <select
+                  value={issueForm.classification}
+                  onChange={(e) =>
+                    setIssueForm({
+                      ...issueForm,
+                      classification: e.target.value,
+                    })
+                  }
+                >
+                  {CLASSIFICATIONS.map((c) => (
+                    <option key={c.value} value={c.value}>
+                      {c.label}
+                    </option>
+                  ))}
+                </select>
+              </label>
+
+              <label className="field">
+                <span className="field-label">Award date *</span>
+                <input
+                  type="date"
+                  required
+                  value={issueForm.awardDate}
+                  onChange={(e) =>
+                    setIssueForm({ ...issueForm, awardDate: e.target.value })
+                  }
+                />
+              </label>
             </div>
 
-            <div className="form-group">
-              <label>3. Holder Full Name (as printed on certificate) *</label>
-              <input
-                type="text"
-                required
-                placeholder="e.g. DUKUNDIMANA DESIRE"
-                value={issueForm.holderName}
-                onChange={(e) =>
-                  setIssueForm({ ...issueForm, holderName: e.target.value })
-                }
-              />
-            </div>
-
-            <div className="form-group">
-              <label>4. Degree / License Title (as printed) *</label>
-              <input
-                type="text"
-                required
-                placeholder="e.g. BACHELOR OF EDUCATION WITH HONOURS"
-                value={issueForm.degreeTitle}
-                onChange={(e) =>
-                  setIssueForm({ ...issueForm, degreeTitle: e.target.value })
-                }
-              />
-            </div>
-
-            <div className="form-group">
-              <label>5. Programme / Specialization (Optional)</label>
-              <input
-                type="text"
-                placeholder="e.g. FOUNDATIONS OF EDUCATION AND ENGLISH"
-                value={issueForm.programme}
-                onChange={(e) =>
-                  setIssueForm({ ...issueForm, programme: e.target.value })
-                }
-              />
-            </div>
-
-            <div className="form-group">
-              <label>6. Classification (Fixed Enum) *</label>
-              <select
-                value={issueForm.classification}
-                onChange={(e) =>
-                  setIssueForm({ ...issueForm, classification: e.target.value })
-                }
+            <div className="form-actions">
+              <button
+                type="submit"
+                className="btn btn-blue"
+                disabled={issuingLoading}
               >
-                {CLASSIFICATIONS.map((c) => (
-                  <option key={c.value} value={c.value}>
-                    {c.label} ({c.value})
-                  </option>
-                ))}
-              </select>
+                {issuingLoading && <Spinner />}
+                {issuingLoading
+                  ? "Waiting for MetaMask signature"
+                  : "Hash and sign with MetaMask"}
+              </button>
+              {issuingLoading && (
+                <span className="muted">
+                  Generating the salted hash, then waiting for your signature.
+                </span>
+              )}
             </div>
+          </form>
 
-            <div className="form-group">
-              <label>7. Award Date (ISO YYYY-MM-DD) *</label>
-              <input
-                type="date"
-                required
-                value={issueForm.awardDate}
-                onChange={(e) =>
-                  setIssueForm({ ...issueForm, awardDate: e.target.value })
-                }
-              />
-            </div>
-          </div>
-
-          <button type="submit" className="btn" disabled={issuingLoading}>
-            {issuingLoading
-              ? "Generating Salt/Hash & Waiting for MetaMask Signature..."
-              : "Generate Salted Hash & Sign On-Chain (MetaMask)"}
-          </button>
-        </form>
-
-        {issueError && (
-          <div className="outcome-banner outcome-MISMATCH_OR_NOT_FOUND">
-            <strong>Error:</strong> {issueError}
-          </div>
-        )}
+          {issueError && (
+            <Notice tone="bad" title="Issuance failed.">
+              {issueError}
+            </Notice>
+          )}
+        </section>
 
         {issuedResult && (
-          <div className="outcome-banner outcome-GENUINE_AND_ACTIVE">
-            <h3 style={{ marginTop: 0 }}>Credential Anchored on Sepolia!</h3>
-            <p>
-              <strong>Reference Code (Stamp on Document):</strong>{" "}
-              <span className="mono">{issuedResult.referenceCode}</span>
-            </p>
-            <p>
-              <strong>Salted SHA-256 Hash:</strong>{" "}
-              <span className="mono">{issuedResult.credentialHash}</span>
-            </p>
-            <p>
-              <strong>Sepolia Transaction Hash:</strong>{" "}
-              <a
-                href={`https://sepolia.etherscan.io/tx/${issuedResult.txHash}`}
-                target="_blank"
-                rel="noreferrer"
-                className="mono"
-              >
-                {issuedResult.txHash}
-              </a>
-            </p>
-            <p>
-              <strong>Issuance Gas Used:</strong> {issuedResult.gasUsed} gas
-            </p>
-            <div
-              style={{
-                display: "flex",
-                alignItems: "center",
-                gap: "16px",
-                marginTop: "10px",
-              }}
-            >
-              <img
-                src={issuedResult.qrCodeDataUrl}
-                alt="Credential QR Code"
-                style={{
-                  width: 120,
-                  height: 120,
-                  border: "1px solid #ccc",
-                  borderRadius: 6,
-                }}
-              />
-              <button
-                type="button"
-                className="btn"
-                onClick={() =>
-                  navigate(
-                    `/verify?ref=${encodeURIComponent(
-                      issuedResult.referenceCode,
-                    )}&inst=${encodeURIComponent(uniCode)}`,
-                  )
-                }
-              >
-                Open Public Verifier (/verify) with Reference Code →
-              </button>
+          <section className="panel">
+            <div className="verdict tone-ok">
+              <span className="verdict-icon">
+                <ToneIcon tone="ok" />
+              </span>
+              <div>
+                <h3>Credential anchored on Sepolia</h3>
+                <p>
+                  Write the reference code on the document so anyone can verify
+                  it.
+                </p>
+              </div>
             </div>
-          </div>
-        )}
-      </div>
 
-      <div className="card">
-        <h2>Issued Credentials by {uniCode} (On-Chain Revocation)</h2>
-        {revokeMsg && (
-          <div
-            className="outcome-banner outcome-GENUINE_BUT_REVOKED"
-            style={{ marginBottom: 12 }}
-          >
-            <strong>{revokeMsg}</strong>
-          </div>
+            <div className="issued-grid">
+              <dl className="facts">
+                <div className="fact">
+                  <dt>Reference code</dt>
+                  <dd className="mono">{issuedResult.referenceCode}</dd>
+                </div>
+                <div className="fact">
+                  <dt>Salted SHA-256 hash</dt>
+                  <dd>
+                    <span className="hash">{issuedResult.credentialHash}</span>
+                  </dd>
+                </div>
+                <div className="fact">
+                  <dt>Transaction</dt>
+                  <dd>
+                    <a
+                      href={`https://sepolia.etherscan.io/tx/${issuedResult.txHash}`}
+                      target="_blank"
+                      rel="noreferrer"
+                      className="mono"
+                    >
+                      {issuedResult.txHash}
+                    </a>
+                  </dd>
+                </div>
+                <div className="fact">
+                  <dt>Gas used</dt>
+                  <dd>{issuedResult.gasUsed}</dd>
+                </div>
+              </dl>
+
+              <div className="qr">
+                <img src={issuedResult.qrCodeDataUrl} alt="Credential QR code" />
+                <button
+                  type="button"
+                  className="btn btn-ghost btn-sm"
+                  onClick={() =>
+                    navigate(
+                      `/verify?ref=${encodeURIComponent(
+                        issuedResult.referenceCode,
+                      )}&inst=${encodeURIComponent(uniCode)}`,
+                    )
+                  }
+                >
+                  Open in public verifier
+                </button>
+              </div>
+            </div>
+          </section>
         )}
-        <table>
-          <thead>
-            <tr>
-              <th>Reference Code</th>
-              <th>Salted Hash (On-Chain Anchor)</th>
-              <th>Opaque Holder Ref</th>
-              <th>Award Date</th>
-              <th>Action</th>
-            </tr>
-          </thead>
-          <tbody>
-            {credentials.map((c) => (
-              <tr key={c.credential_id}>
-                <td className="mono">
-                  <strong>{c.reference_code}</strong>
-                </td>
-                <td className="mono">
-                  {c.credential_hash.slice(0, 14)}...
-                  {c.credential_hash.slice(-8)}
-                </td>
-                <td className="mono">{c.holder_reference}</td>
-                <td>String(c.issuance_date).slice(0, 10)</td>
-                <td>
-                  <button
-                    className="btn btn-danger"
-                    style={{ padding: "6px 10px", fontSize: "0.8rem" }}
-                    disabled={revokingHash === c.credential_hash}
-                    onClick={() =>
-                      handleRevokeCredential(
-                        c.credential_hash,
-                        c.reference_code,
-                      )
-                    }
-                  >
-                    {revokingHash === c.credential_hash
-                      ? "Revoking..."
-                      : "Revoke On-Chain"}
-                  </button>
-                </td>
-              </tr>
-            ))}
-            {credentials.length === 0 && (
-              <tr>
-                <td colSpan={5}>No credentials issued by {uniCode} yet.</td>
-              </tr>
-            )}
-          </tbody>
-        </table>
+
+        <section className="panel">
+          <h2 className="panel-title">Credentials issued by {uniCode}</h2>
+          <p className="panel-text">
+            Revoking a credential writes the revocation to the chain and needs a
+            MetaMask signature.
+          </p>
+
+          {revokeMsg && <Notice tone="warn">{revokeMsg}</Notice>}
+
+          <div className="table-wrap">
+            <table>
+              <thead>
+                <tr>
+                  <th>Reference code</th>
+                  <th>Anchored hash</th>
+                  <th>Holder reference</th>
+                  <th>Award date</th>
+                  <th>Action</th>
+                </tr>
+              </thead>
+              <tbody>
+                {credentials.map((c) => (
+                  <tr key={c.credential_id}>
+                    <td className="mono">
+                      <strong>{c.reference_code}</strong>
+                    </td>
+                    <td className="mono">
+                      {c.credential_hash.slice(0, 14)}...
+                      {c.credential_hash.slice(-8)}
+                    </td>
+                    <td className="mono">{c.holder_reference}</td>
+                    <td>{String(c.issuance_date).slice(0, 10)}</td>
+                    <td>
+                      <button
+                        className="btn btn-danger btn-sm"
+                        disabled={revokingHash === c.credential_hash}
+                        onClick={() =>
+                          handleRevokeCredential(
+                            c.credential_hash,
+                            c.reference_code,
+                          )
+                        }
+                      >
+                        {revokingHash === c.credential_hash && <Spinner />}
+                        {revokingHash === c.credential_hash
+                          ? "Revoking"
+                          : "Revoke on-chain"}
+                      </button>
+                    </td>
+                  </tr>
+                ))}
+                {credentials.length === 0 && (
+                  <tr>
+                    <td colSpan={5} className="cell-empty">
+                      No credentials issued by {uniCode} yet.
+                    </td>
+                  </tr>
+                )}
+              </tbody>
+            </table>
+          </div>
+        </section>
       </div>
     </>
   );
 }
+
+/* ---------- Public verifier ---------- */
 
 function VerifyPage({ institutions }: { institutions: Institution[] }) {
   const [searchParams] = useSearchParams();
@@ -795,218 +1005,283 @@ function VerifyPage({ institutions }: { institutions: Institution[] }) {
     }
   }
 
+  const meta = verifyResponse ? outcomeMeta(verifyResponse.result) : null;
+  const recomputed = verifyResponse?.details?.recomputedHash;
+  const anchored = verifyResponse?.details?.anchoredHash;
+  const hashesMatch = !!recomputed && !!anchored && recomputed === anchored;
+
   return (
-    <div className="grid-2">
-      <div className="card">
-        <h2>
-          Public Credential Verification
-          (/verify)[span_18](start_span)[span_18](end_span)[span_19](start_span)[span_19](end_span)
-        </h2>
-        <p style={{ fontSize: "0.86rem", color: "#4a5568" }}>
-          Re-enter the visible fields printed on the presented certificate along
-          with its Reference
-          Code[span_20](start_span)[span_20](end_span)[span_21](start_span)[span_21](end_span).
-          No wallet or registrar contact
-          required[span_22](start_span)[span_22](end_span)[span_23](start_span)[span_23](end_span).
-        </p>
-        <form onSubmit={handleVerifyCredential}>
-          <div className="form-group">
-            <label>Reference Code / Printed Certificate ID *</label>
-            <input
-              type="text"
-              required
-              placeholder="e.g. RW-UNIVA-2026-... or 220001624"
-              value={verifyForm.referenceCode}
-              onChange={(e) =>
-                setVerifyForm({ ...verifyForm, referenceCode: e.target.value })
-              }
-            />
-          </div>
+    <>
+      <PageHead title="Verify a credential">
+        Re-enter the fields printed on the certificate along with its reference
+        code. No wallet or contact with the issuing institution is needed.
+      </PageHead>
 
-          <div className="form-group">
-            <label>1. Issuing Institution *</label>
-            <select
-              value={verifyForm.institution}
-              onChange={(e) =>
-                setVerifyForm({ ...verifyForm, institution: e.target.value })
-              }
-            >
-              {institutions.map((inst) => (
-                <option key={inst.code} value={inst.code}>
-                  {inst.code} — {inst.name}
-                </option>
-              ))}
-            </select>
-          </div>
-
-          <div className="form-group">
-            <label>3. Holder Full Name (as printed on document) *</label>
-            <input
-              type="text"
-              required
-              placeholder="e.g. DUKUNDIMANA DESIRE"
-              value={verifyForm.holderName}
-              onChange={(e) =>
-                setVerifyForm({ ...verifyForm, holderName: e.target.value })
-              }
-            />
-          </div>
-
-          <div className="form-group">
-            <label>4. Degree / License Title *</label>
-            <input
-              type="text"
-              required
-              placeholder="e.g. BACHELOR OF EDUCATION WITH HONOURS"
-              value={verifyForm.degreeTitle}
-              onChange={(e) =>
-                setVerifyForm({ ...verifyForm, degreeTitle: e.target.value })
-              }
-            />
-          </div>
-
-          <div className="form-group">
-            <label>5. Programme / Specialization (if printed)</label>
-            <input
-              type="text"
-              placeholder="Leave blank if none"
-              value={verifyForm.programme}
-              onChange={(e) =>
-                setVerifyForm({ ...verifyForm, programme: e.target.value })
-              }
-            />
-          </div>
-
-          <div className="form-group">
-            <label>6. Classification *</label>
-            <select
-              value={verifyForm.classification}
-              onChange={(e) =>
-                setVerifyForm({ ...verifyForm, classification: e.target.value })
-              }
-            >
-              {CLASSIFICATIONS.map((c) => (
-                <option key={c.value} value={c.value}>
-                  {c.label} ({c.value})
-                </option>
-              ))}
-            </select>
-          </div>
-
-          <div className="form-group">
-            <label>7. Award Date (YYYY-MM-DD) *</label>
-            <input
-              type="date"
-              required
-              value={verifyForm.awardDate}
-              onChange={(e) =>
-                setVerifyForm({ ...verifyForm, awardDate: e.target.value })
-              }
-            />
-          </div>
-
-          <div className="form-group">
-            <label>
-              Evaluation Scenario Tag (Logged to verification_logs for Objective
-              3)[span_24](start_span)[span_24](end_span)[span_25](start_span)[span_25](end_span)
-            </label>
-            <select
-              value={verifyForm.scenarioType}
-              onChange={(e) =>
-                setVerifyForm({ ...verifyForm, scenarioType: e.target.value })
-              }
-            >
-              <option value="GENUINE">
-                GENUINE (Unaltered Issued Credential)
-              </option>
-              <option value="TAMPERED">
-                TAMPERED (Real Reference Code + Altered Field)
-              </option>
-              <option value="FABRICATED">
-                FABRICATED (Never Issued / Fake Reference Code)
-              </option>
-              <option value="REVOKED">
-                REVOKED (Issued Then Revoked On-Chain)
-              </option>
-            </select>
-          </div>
-
-          <button type="submit" className="btn" disabled={verifyLoading}>
-            {verifyLoading
-              ? "Recomputing Hash & Querying Sepolia Blockchain..."
-              : "Verify Credential Against Sepolia Blockchain"}
-          </button>
-        </form>
-
-        {verifyError && (
-          <div className="outcome-banner outcome-MISMATCH_OR_NOT_FOUND">
-            <strong>Error:</strong> {verifyError}
-          </div>
-        )}
-      </div>
-
-      <div className="card">
-        <h2>Cryptographic Verification Result</h2>
-        {!verifyResponse ? (
-          <p style={{ color: "#4a5568" }}>
-            Submit the certificate details on the left to recompute its salted
-            SHA-256 hash and compare it against the immutable Sepolia smart
-            contract record.
+      <div className="split">
+        <section className="panel">
+          <h2 className="panel-title">Certificate details</h2>
+          <p className="panel-text">
+            Spelling and spacing must match the printed document.
           </p>
-        ) : (
-          <div className={`outcome-banner outcome-${verifyResponse.result}`}>
-            <h3 style={{ marginTop: 0 }}>
-              Outcome:{" "}
-              {verifyResponse.result === "GENUINE_AND_ACTIVE" &&
-                "✅ GENUINE AND ACTIVE"}
-              {verifyResponse.result === "GENUINE_BUT_REVOKED" &&
-                "⚠️ GENUINE BUT REVOKED"}
-              {verifyResponse.result === "MISMATCH_OR_NOT_FOUND" &&
-                "❌ MISMATCH OR NOT FOUND"}
-            </h3>
-            <p>
-              <strong>Reference Code Checked:</strong>{" "}
-              <span className="mono">{verifyResponse.referenceCode}</span>
-            </p>
-            <p>
-              <strong>Verification Response Time:</strong>{" "}
-              <strong>{verifyResponse.responseTimeMs} ms</strong> (
-              {(verifyResponse.responseTimeMs / 1000).toFixed(2)} seconds)
-            </p>
-            <p>
-              <strong>Recomputed Hash (from entered fields + salt):</strong>{" "}
-              <span className="mono">
-                {verifyResponse.details?.recomputedHash ?? "N/A"}
+
+          <form onSubmit={handleVerifyCredential}>
+            <div className="field-grid">
+              <label className="field">
+                <span className="field-label">Reference code *</span>
+                <input
+                  type="text"
+                  required
+                  placeholder="e.g. RW-UNIVA-2026-... or 220001624"
+                  value={verifyForm.referenceCode}
+                  onChange={(e) =>
+                    setVerifyForm({
+                      ...verifyForm,
+                      referenceCode: e.target.value,
+                    })
+                  }
+                />
+              </label>
+
+              <label className="field">
+                <span className="field-label">Issuing institution *</span>
+                <select
+                  value={verifyForm.institution}
+                  onChange={(e) =>
+                    setVerifyForm({ ...verifyForm, institution: e.target.value })
+                  }
+                >
+                  {institutions.map((inst) => (
+                    <option key={inst.code} value={inst.code}>
+                      {inst.code} - {inst.name}
+                    </option>
+                  ))}
+                </select>
+              </label>
+
+              <label className="field span-2">
+                <span className="field-label">Holder full name *</span>
+                <input
+                  type="text"
+                  required
+                  placeholder="e.g. DUKUNDIMANA DESIRE"
+                  value={verifyForm.holderName}
+                  onChange={(e) =>
+                    setVerifyForm({ ...verifyForm, holderName: e.target.value })
+                  }
+                />
+              </label>
+
+              <label className="field span-2">
+                <span className="field-label">Degree or license title *</span>
+                <input
+                  type="text"
+                  required
+                  placeholder="e.g. BACHELOR OF EDUCATION WITH HONOURS"
+                  value={verifyForm.degreeTitle}
+                  onChange={(e) =>
+                    setVerifyForm({
+                      ...verifyForm,
+                      degreeTitle: e.target.value,
+                    })
+                  }
+                />
+              </label>
+
+              <label className="field span-2">
+                <span className="field-label">Programme or specialization</span>
+                <input
+                  type="text"
+                  placeholder="Leave blank if none is printed"
+                  value={verifyForm.programme}
+                  onChange={(e) =>
+                    setVerifyForm({ ...verifyForm, programme: e.target.value })
+                  }
+                />
+              </label>
+
+              <label className="field">
+                <span className="field-label">Classification *</span>
+                <select
+                  value={verifyForm.classification}
+                  onChange={(e) =>
+                    setVerifyForm({
+                      ...verifyForm,
+                      classification: e.target.value,
+                    })
+                  }
+                >
+                  {CLASSIFICATIONS.map((c) => (
+                    <option key={c.value} value={c.value}>
+                      {c.label}
+                    </option>
+                  ))}
+                </select>
+              </label>
+
+              <label className="field">
+                <span className="field-label">Award date *</span>
+                <input
+                  type="date"
+                  required
+                  value={verifyForm.awardDate}
+                  onChange={(e) =>
+                    setVerifyForm({ ...verifyForm, awardDate: e.target.value })
+                  }
+                />
+              </label>
+            </div>
+
+            <h3 className="section-title">Evaluation</h3>
+            <label className="field">
+              <span className="field-label">Scenario tag</span>
+              <select
+                value={verifyForm.scenarioType}
+                onChange={(e) =>
+                  setVerifyForm({ ...verifyForm, scenarioType: e.target.value })
+                }
+              >
+                <option value="GENUINE">Genuine (unaltered credential)</option>
+                <option value="TAMPERED">
+                  Tampered (real reference code, altered field)
+                </option>
+                <option value="FABRICATED">
+                  Fabricated (never issued, fake reference code)
+                </option>
+                <option value="REVOKED">
+                  Revoked (issued, then revoked on-chain)
+                </option>
+              </select>
+              <span className="field-hint">
+                Saved to the evaluation logs with the outcome and response time.
               </span>
-            </p>
-            <p>
-              <strong>On-Chain Anchored Hash (Sepolia):</strong>{" "}
-              <span className="mono">
-                {verifyResponse.details?.anchoredHash ?? "Not Found"}
-              </span>
-            </p>
-            {verifyResponse.details?.issuerAddress && (
+            </label>
+
+            <div className="form-actions">
+              <button
+                type="submit"
+                className="btn btn-blue"
+                disabled={verifyLoading}
+              >
+                {verifyLoading && <Spinner />}
+                {verifyLoading ? "Checking Sepolia" : "Verify credential"}
+              </button>
+            </div>
+          </form>
+
+          {verifyError && (
+            <Notice tone="bad" title="Verification failed.">
+              {verifyError}
+            </Notice>
+          )}
+        </section>
+
+        <section className="panel sticky" aria-live="polite">
+          <h2 className="panel-title">Verification result</h2>
+          <p className="panel-text">
+            The salted SHA-256 hash is recomputed and compared with the record
+            on the Sepolia contract.
+          </p>
+
+          {verifyLoading && (
+            <div className="empty">
+              <Spinner />
+              <p>Recomputing the hash and querying the blockchain.</p>
+            </div>
+          )}
+
+          {!verifyLoading && !verifyResponse && (
+            <div className="empty">
+              <svg
+                width="40"
+                height="40"
+                viewBox="0 0 24 24"
+                fill="none"
+                stroke="currentColor"
+                strokeWidth="1.5"
+                strokeLinecap="round"
+                strokeLinejoin="round"
+                aria-hidden="true"
+              >
+                <path d="M12 3l8 3v6c0 4.5-3.2 8-8 9-4.8-1-8-4.5-8-9V6l8-3z" />
+                <path d="M9 12l2.2 2.2L15.5 10" />
+              </svg>
               <p>
-                <strong>Anchored Issuer Wallet:</strong>{" "}
-                <span className="mono">
-                  {verifyResponse.details.issuerAddress}
+                Submit the certificate details and the result will appear here.
+              </p>
+            </div>
+          )}
+
+          {!verifyLoading && verifyResponse && meta && (
+            <>
+              <div className={`verdict tone-${meta.tone}`}>
+                <span className="verdict-icon">
+                  <ToneIcon tone={meta.tone} />
                 </span>
-              </p>
-            )}
-            {verifyResponse.details?.revocationTimestamp > 0 && (
-              <p>
-                <strong>Revoked On-Chain At:</strong>{" "}
-                {new Date(
-                  verifyResponse.details.revocationTimestamp * 1000,
-                ).toUTCString()}
-              </p>
-            )}
-          </div>
-        )}
+                <div>
+                  <h3>{meta.title}</h3>
+                  <p>{meta.text}</p>
+                </div>
+              </div>
+
+              <dl className="facts">
+                <div className="fact">
+                  <dt>Reference code</dt>
+                  <dd className="mono">{verifyResponse.referenceCode}</dd>
+                </div>
+                <div className="fact">
+                  <dt>Response time</dt>
+                  <dd>
+                    {verifyResponse.responseTimeMs} ms (
+                    {(verifyResponse.responseTimeMs / 1000).toFixed(2)} s)
+                  </dd>
+                </div>
+                <div className="fact">
+                  <dt>Recomputed hash</dt>
+                  <dd>
+                    <span className="hash">{recomputed ?? "N/A"}</span>
+                  </dd>
+                </div>
+                <div className="fact">
+                  <dt>On-chain hash</dt>
+                  <dd>
+                    <span className="hash">{anchored ?? "Not found"}</span>
+                    {recomputed && anchored && (
+                      <span
+                        className={`match-line ${hashesMatch ? "tone-ok" : "tone-bad"}`}
+                      >
+                        {hashesMatch ? "Hashes match" : "Hashes differ"}
+                      </span>
+                    )}
+                  </dd>
+                </div>
+                {verifyResponse.details?.issuerAddress && (
+                  <div className="fact">
+                    <dt>Issuer wallet</dt>
+                    <dd className="mono">
+                      {verifyResponse.details.issuerAddress}
+                    </dd>
+                  </div>
+                )}
+                {verifyResponse.details?.revocationTimestamp > 0 && (
+                  <div className="fact">
+                    <dt>Revoked at</dt>
+                    <dd>
+                      {new Date(
+                        verifyResponse.details.revocationTimestamp * 1000,
+                      ).toUTCString()}
+                    </dd>
+                  </div>
+                )}
+              </dl>
+            </>
+          )}
+        </section>
       </div>
-    </div>
+    </>
   );
 }
+
+/* ---------- Logs ---------- */
 
 function LogsPage() {
   const [logs, setLogs] = useState<VerificationLogRow[]>([]);
@@ -1020,65 +1295,86 @@ function LogsPage() {
       .catch(console.error);
   }, []);
 
+  const avgMs =
+    logs.length > 0
+      ? Math.round(
+          logs.reduce((sum, l) => sum + Number(l.response_time_ms), 0) /
+            logs.length,
+        )
+      : 0;
+  const genuineCount = logs.filter(
+    (l) => l.result === "GENUINE_AND_ACTIVE",
+  ).length;
+
   return (
-    <div className="card">
-      <h2>
-        Objective 3 Evaluation Logs
-        (/logs)[span_26](start_span)[span_26](end_span)[span_27](start_span)[span_27](end_span)
-      </h2>
-      <p style={{ fontSize: "0.86rem", color: "#4a5568" }}>
-        Automatically records every verification test scenario, outcome, and
-        response time (ms) for Section 3.2.4
-        evaluation[span_28](start_span)[span_28](end_span)[span_29](start_span)[span_29](end_span).
-      </p>
-      <table>
-        <thead>
-          <tr>
-            <th>Log ID</th>
-            <th>Reference Code</th>
-            <th>Scenario Tested</th>
-            <th>Verification Outcome</th>
-            <th>Response Time (ms)</th>
-            <th>Timestamp</th>
-          </tr>
-        </thead>
-        <tbody>
-          {logs.map((L) => (
-            <tr key={L.log_id}>
-              <td>#{L.log_id}</td>
-              <td className="mono">{L.reference_code}</td>
-              <td>
-                <strong>{L.scenario_type}</strong>
-              </td>
-              <td>
-                <span
-                  className={`badge ${
-                    L.result === "GENUINE_AND_ACTIVE"
-                      ? "badge-green"
-                      : L.result === "GENUINE_BUT_REVOKED"
-                        ? "badge-amber"
-                        : "badge-red"
-                  }`}
-                >
-                  {L.result}
-                </span>
-              </td>
-              <td>
-                <strong>{L.response_time_ms} ms</strong>
-              </td>
-              <td>{new Date(L.timestamp).toLocaleString()}</td>
-            </tr>
-          ))}
-          {logs.length === 0 && (
-            <tr>
-              <td colSpan={6}>No verification attempts logged yet.</td>
-            </tr>
-          )}
-        </tbody>
-      </table>
-    </div>
+    <>
+      <PageHead title="Evaluation logs">
+        Every verification attempt is recorded with its test scenario, outcome
+        and response time, ready for the Section 3.2.4 evaluation.
+      </PageHead>
+
+      <div className="stats">
+        <div className="stat">
+          <span className="stat-value">{logs.length}</span>
+          <span className="stat-label">Verifications logged</span>
+        </div>
+        <div className="stat">
+          <span className="stat-value">{logs.length ? `${avgMs} ms` : "-"}</span>
+          <span className="stat-label">Average response time</span>
+        </div>
+        <div className="stat">
+          <span className="stat-value">{genuineCount}</span>
+          <span className="stat-label">Genuine and active</span>
+        </div>
+      </div>
+
+      <section className="panel">
+        <div className="table-wrap">
+          <table>
+            <thead>
+              <tr>
+                <th>Log ID</th>
+                <th>Reference code</th>
+                <th>Scenario</th>
+                <th>Outcome</th>
+                <th>Response time</th>
+                <th>Timestamp</th>
+              </tr>
+            </thead>
+            <tbody>
+              {logs.map((L) => (
+                <tr key={L.log_id}>
+                  <td>#{L.log_id}</td>
+                  <td className="mono">{L.reference_code}</td>
+                  <td>{sentence(L.scenario_type)}</td>
+                  <td>
+                    <span
+                      className={`badge tone-${outcomeMeta(L.result).tone}`}
+                      title={L.result}
+                    >
+                      {outcomeMeta(L.result).title}
+                    </span>
+                  </td>
+                  <td>{L.response_time_ms} ms</td>
+                  <td>{new Date(L.timestamp).toLocaleString()}</td>
+                </tr>
+              ))}
+              {logs.length === 0 && (
+                <tr>
+                  <td colSpan={6} className="cell-empty">
+                    No verification attempts logged yet.
+                  </td>
+                </tr>
+              )}
+            </tbody>
+          </table>
+        </div>
+      </section>
+    </>
   );
 }
+
+/* ---------- App ---------- */
 
 export default function App() {
   const [walletAddress, setWalletAddress] = useState<string>("");
@@ -1158,42 +1454,41 @@ export default function App() {
 
   return (
     <BrowserRouter>
-      <div className="app-container">
-        <Header
-          walletAddress={walletAddress}
-          connectWallet={connectWallet}
-          contractAddress={contractAddress}
-        />
-        <Routes>
-          <Route path="/" element={<Navigate to="/register" replace />} />
-          <Route
-            path="/register"
-            element={
-              <RegisterPage
-                institutions={institutions}
-                walletAddress={walletAddress}
-                connectWallet={connectWallet}
-                refreshInstitutions={fetchHealthAndInstitutions}
-                backendError={backendError}
-              />
-            }
-          />
-          <Route
-            path="/:university/issue_degree"
-            element={
-              <IssueDegreePage
-                institutions={institutions}
-                walletAddress={walletAddress}
-                contractAddress={contractAddress}
-              />
-            }
-          />
-          <Route
-            path="/verify"
-            element={<VerifyPage institutions={institutions} />}
-          />
-          <Route path="/logs" element={<LogsPage />} />
-        </Routes>
+      <div className="app-shell">
+        <Header walletAddress={walletAddress} connectWallet={connectWallet} />
+        <main className="page">
+          <Routes>
+            <Route path="/" element={<Navigate to="/register" replace />} />
+            <Route
+              path="/register"
+              element={
+                <RegisterPage
+                  institutions={institutions}
+                  walletAddress={walletAddress}
+                  connectWallet={connectWallet}
+                  refreshInstitutions={fetchHealthAndInstitutions}
+                  backendError={backendError}
+                />
+              }
+            />
+            <Route
+              path="/:university/issue_degree"
+              element={
+                <IssueDegreePage
+                  institutions={institutions}
+                  walletAddress={walletAddress}
+                  contractAddress={contractAddress}
+                />
+              }
+            />
+            <Route
+              path="/verify"
+              element={<VerifyPage institutions={institutions} />}
+            />
+            <Route path="/logs" element={<LogsPage />} />
+          </Routes>
+        </main>
+        <Footer contractAddress={contractAddress} />
       </div>
     </BrowserRouter>
   );
