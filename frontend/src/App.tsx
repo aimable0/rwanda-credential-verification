@@ -66,6 +66,8 @@ interface VerificationLogRow {
   response_time_ms: number;
 }
 
+type AuthFetch = (url: string, init?: RequestInit) => Promise<Response>;
+
 /* ---------- Presentation helpers ---------- */
 
 type Tone = "ok" | "warn" | "bad";
@@ -402,12 +404,14 @@ function RegisterPage({
   connectWallet,
   refreshInstitutions,
   backendError,
+  authFetch,
 }: {
   institutions: Institution[];
   walletAddress: string;
   connectWallet: () => Promise<void>;
   refreshInstitutions: () => Promise<void>;
   backendError: string | null;
+  authFetch: AuthFetch;
 }) {
   const navigate = useNavigate();
   const [selectedCode, setSelectedCode] = useState<string>("UNIVA");
@@ -454,10 +458,10 @@ function RegisterPage({
 
     setLoading(true);
     try {
-      const res = await fetch(`${API_BASE}/institutions/register`, {
+      const res = await authFetch(`${API_BASE}/institutions/register`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ code: selectedCode, walletAddress }),
+        body: JSON.stringify({ code: selectedCode }),
       });
       const data = await res.json();
       if (!res.ok) {
@@ -649,11 +653,17 @@ function IssueDegreePage({
   walletAddress,
   connectWallet,
   contractAddress,
+  token,
+  signIn,
+  authFetch,
 }: {
   institutions: Institution[];
   walletAddress: string;
   connectWallet: () => Promise<void>;
   contractAddress: string;
+  token: string | null;
+  signIn: () => Promise<string>;
+  authFetch: AuthFetch;
 }) {
   const { university } = useParams<{ university: string }>();
   const navigate = useNavigate();
@@ -687,9 +697,11 @@ function IssueDegreePage({
   const [credentials, setCredentials] = useState<CredentialRow[]>([]);
   const [revokingHash, setRevokingHash] = useState<string | null>(null);
   const [revokeMsg, setRevokeMsg] = useState<string | null>(null);
+  const [signingIn, setSigningIn] = useState(false);
+  const [signInError, setSignInError] = useState<string | null>(null);
 
   useEffect(() => {
-    if (isOwner) {
+    if (isOwner && token) {
       fetchUniversityCredentials();
     } else {
       // Never keep another institution's data on screen after an account switch
@@ -697,11 +709,11 @@ function IssueDegreePage({
       setIssuedResult(null);
       setRevokeMsg(null);
     }
-  }, [uniCode, isOwner]);
+  }, [uniCode, isOwner, token]);
 
   async function fetchUniversityCredentials() {
     try {
-      const res = await fetch(
+      const res = await authFetch(
         `${API_BASE}/credentials?institutionCode=${uniCode}`,
       );
       if (res.ok) setCredentials(await res.json());
@@ -731,13 +743,12 @@ function IssueDegreePage({
 
     setIssuingLoading(true);
     try {
-      const prepRes = await fetch(`${API_BASE}/credentials/prepare`, {
+      const prepRes = await authFetch(`${API_BASE}/credentials/prepare`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           institution: uniCode,
           ...issueForm,
-          walletAddress,
         }),
       });
       const prepData = await prepRes.json();
@@ -922,6 +933,45 @@ function IssueDegreePage({
               Back to onboarding
             </Link>
           </div>
+        </section>
+      </>
+    );
+  }
+
+  if (!token) {
+    return (
+      <>
+        <BackLink to="/register">Back to institution onboarding</BackLink>
+        <section className="panel">
+          <h2 className="panel-title">Sign in as the {uniCode} registrar</h2>
+          <p className="panel-text">
+            Sign a short message in MetaMask to prove you control this wallet.
+            It costs no gas and sends no transaction.
+          </p>
+          <button
+            type="button"
+            className="btn btn-blue"
+            disabled={signingIn}
+            onClick={async () => {
+              setSignInError(null);
+              setSigningIn(true);
+              try {
+                await signIn();
+              } catch (err: any) {
+                setSignInError(err.shortMessage ?? err.message);
+              } finally {
+                setSigningIn(false);
+              }
+            }}
+          >
+            {signingIn && <Spinner />}
+            {signingIn ? "Waiting for MetaMask" : "Sign in with MetaMask"}
+          </button>
+          {signInError && (
+            <Notice tone="bad" title="Sign-in failed.">
+              {signInError}
+            </Notice>
+          )}
         </section>
       </>
     );
@@ -1620,6 +1670,30 @@ export default function App() {
   const [institutions, setInstitutions] = useState<Institution[]>([]);
   const [backendError, setBackendError] = useState<string | null>(null);
   const [theme, toggleTheme] = useTheme();
+  const [auth, setAuth] = useState<{ token: string; wallet: string } | null>(
+    () => {
+      try {
+        const raw = sessionStorage.getItem("auth");
+        return raw ? JSON.parse(raw) : null;
+      } catch {
+        return null;
+      }
+    },
+  );
+  // A token only counts for the wallet it was issued to
+  const token =
+    auth && walletAddress && auth.wallet === walletAddress.toLowerCase()
+      ? auth.token
+      : null;
+
+  useEffect(() => {
+    try {
+      if (auth) sessionStorage.setItem("auth", JSON.stringify(auth));
+      else sessionStorage.removeItem("auth");
+    } catch {
+      /* storage unavailable */
+    }
+  }, [auth]);
 
   useEffect(() => {
     fetchHealthAndInstitutions();
@@ -1709,6 +1783,51 @@ export default function App() {
     }
   }
 
+  // Proves control of the connected wallet: nonce -> MetaMask signature -> token
+  async function signIn(): Promise<string> {
+    const ethereum = (window as any).ethereum;
+    if (!ethereum || !walletAddress) {
+      throw new Error("Connect your MetaMask wallet first.");
+    }
+    const nRes = await fetch(`${API_BASE}/auth/nonce`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ walletAddress }),
+    });
+    const nData = await nRes.json();
+    if (!nRes.ok) throw new Error(nData.error ?? "Could not start sign-in");
+
+    const signer = await new ethers.BrowserProvider(ethereum).getSigner(
+      walletAddress,
+    );
+    const signature = await signer.signMessage(nData.message);
+
+    const lRes = await fetch(`${API_BASE}/auth/login`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ walletAddress, signature }),
+    });
+    const lData = await lRes.json();
+    if (!lRes.ok) throw new Error(lData.error ?? "Sign-in failed");
+
+    setAuth({ token: lData.token, wallet: lData.walletAddress });
+    return lData.token;
+  }
+
+  // fetch() with the wallet token attached; signs in first if there is none
+  async function authFetch(url: string, init: RequestInit = {}) {
+    const t = token ?? (await signIn());
+    const res = await fetch(url, {
+      ...init,
+      headers: {
+        ...(init.headers as Record<string, string>),
+        Authorization: `Bearer ${t}`,
+      },
+    });
+    if (res.status === 401) setAuth(null); // expired, ask again next time
+    return res;
+  }
+
   return (
     <BrowserRouter>
       <div className="app-shell">
@@ -1730,6 +1849,7 @@ export default function App() {
                   connectWallet={connectWallet}
                   refreshInstitutions={fetchHealthAndInstitutions}
                   backendError={backendError}
+                  authFetch={authFetch}
                 />
               }
             />
@@ -1741,6 +1861,9 @@ export default function App() {
                   walletAddress={walletAddress}
                   connectWallet={connectWallet}
                   contractAddress={contractAddress}
+                  token={token}
+                  signIn={signIn}
+                  authFetch={authFetch}
                 />
               }
             />
