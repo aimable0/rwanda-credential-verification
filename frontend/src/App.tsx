@@ -147,7 +147,13 @@ function BrandMark() {
       fill="none"
       aria-hidden="true"
     >
-      <circle cx="19" cy="19" r="17.5" fill="#0e2a47" />
+      <circle
+        cx="19"
+        cy="19"
+        r="17.5"
+        fill="#0e2a47"
+        style={{ fill: "var(--mark-bg)" }}
+      />
       <circle cx="19" cy="19" r="14" stroke="#d9a400" strokeWidth="1.5" />
       <path
         d="M12.5 19.5l4.2 4.2 8.8-9.2"
@@ -220,15 +226,88 @@ function BackLink({ to, children }: { to: string; children: React.ReactNode }) {
   );
 }
 
+/* ---------- Theme ---------- */
+
+type Theme = "light" | "dark";
+
+function useTheme(): [Theme, () => void] {
+  const [theme, setTheme] = useState<Theme>(() => {
+    try {
+      const saved = localStorage.getItem("theme");
+      if (saved === "light" || saved === "dark") return saved;
+    } catch {
+      /* storage unavailable */
+    }
+    return window.matchMedia("(prefers-color-scheme: dark)").matches
+      ? "dark"
+      : "light";
+  });
+
+  useEffect(() => {
+    document.documentElement.dataset.theme = theme;
+    try {
+      localStorage.setItem("theme", theme);
+    } catch {
+      /* storage unavailable */
+    }
+  }, [theme]);
+
+  return [theme, () => setTheme((t) => (t === "dark" ? "light" : "dark"))];
+}
+
+function ThemeToggle({
+  theme,
+  onToggle,
+}: {
+  theme: Theme;
+  onToggle: () => void;
+}) {
+  const next = theme === "dark" ? "light" : "dark";
+  return (
+    <button
+      type="button"
+      className="icon-btn"
+      onClick={onToggle}
+      aria-label={`Switch to ${next} mode`}
+      title={`Switch to ${next} mode`}
+    >
+      <svg
+        width="18"
+        height="18"
+        viewBox="0 0 24 24"
+        fill="none"
+        stroke="currentColor"
+        strokeWidth="2"
+        strokeLinecap="round"
+        strokeLinejoin="round"
+        aria-hidden="true"
+      >
+        {theme === "dark" ? (
+          <>
+            <circle cx="12" cy="12" r="4" />
+            <path d="M12 2v2M12 20v2M4.9 4.9l1.4 1.4M17.7 17.7l1.4 1.4M2 12h2M20 12h2M4.9 19.1l1.4-1.4M17.7 6.3l1.4-1.4" />
+          </>
+        ) : (
+          <path d="M20 14.5A8 8 0 019.5 4 8 8 0 1020 14.5z" />
+        )}
+      </svg>
+    </button>
+  );
+}
+
 /* ---------- Top bar and footer ---------- */
 
 // Context-aware header: hides internal navigation on the public /verify page
 function Header({
   walletAddress,
   connectWallet,
+  theme,
+  onToggleTheme,
 }: {
   walletAddress: string;
   connectWallet: () => Promise<void>;
+  theme: Theme;
+  onToggleTheme: () => void;
 }) {
   const location = useLocation();
   const isVerifierPage = location.pathname.startsWith("/verify");
@@ -271,9 +350,9 @@ function Header({
           </nav>
         )}
 
-        {!isVerifierPage && (
-          <div className="topbar-actions">
-            {walletAddress ? (
+        <div className="topbar-actions">
+          {!isVerifierPage &&
+            (walletAddress ? (
               <span className="wallet-pill" title={walletAddress}>
                 {shortAddr(walletAddress)}
               </span>
@@ -281,9 +360,9 @@ function Header({
               <button className="btn btn-sm" onClick={connectWallet}>
                 Connect MetaMask
               </button>
-            )}
-          </div>
-        )}
+            ))}
+          <ThemeToggle theme={theme} onToggle={onToggleTheme} />
+        </div>
       </div>
     </header>
   );
@@ -1383,6 +1462,7 @@ export default function App() {
   );
   const [institutions, setInstitutions] = useState<Institution[]>([]);
   const [backendError, setBackendError] = useState<string | null>(null);
+  const [theme, toggleTheme] = useTheme();
 
   useEffect(() => {
     fetchHealthAndInstitutions();
@@ -1455,7 +1535,12 @@ export default function App() {
   return (
     <BrowserRouter>
       <div className="app-shell">
-        <Header walletAddress={walletAddress} connectWallet={connectWallet} />
+        <Header
+          walletAddress={walletAddress}
+          connectWallet={connectWallet}
+          theme={theme}
+          onToggleTheme={toggleTheme}
+        />
         <main className="page">
           <Routes>
             <Route path="/" element={<Navigate to="/register" replace />} />
