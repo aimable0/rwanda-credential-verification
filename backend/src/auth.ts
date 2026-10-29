@@ -15,6 +15,7 @@ import crypto from "crypto";
 import { ethers } from "ethers";
 import { Request, Response, NextFunction } from "express";
 import { query } from "./db"; // adjust the path or extension to match your other imports
+import { getHecAddress } from "./services/blockchain";
 
 const NONCE_TTL_MS = 5 * 60 * 1000;
 const TOKEN_TTL_MS = 2 * 60 * 60 * 1000;
@@ -45,20 +46,14 @@ function b64(input: string | Buffer) {
 
 function sign(payload: object) {
   const body = b64(JSON.stringify(payload));
-  const mac = crypto
-    .createHmac("sha256", SECRET)
-    .update(body)
-    .digest("base64url");
+  const mac = crypto.createHmac("sha256", SECRET).update(body).digest("base64url");
   return `${body}.${mac}`;
 }
 
 function verifyToken(token: string): { w: string; exp: number } | null {
   const [body, mac] = token.split(".");
   if (!body || !mac) return null;
-  const expected = crypto
-    .createHmac("sha256", SECRET)
-    .update(body)
-    .digest("base64url");
+  const expected = crypto.createHmac("sha256", SECRET).update(body).digest("base64url");
   const a = Buffer.from(mac);
   const b = Buffer.from(expected);
   if (a.length !== b.length || !crypto.timingSafeEqual(a, b)) return null;
@@ -88,31 +83,22 @@ export function loginHandler(req: Request, res: Response) {
   const address = String(req.body?.walletAddress ?? "");
   const signature = String(req.body?.signature ?? "");
   if (!ethers.isAddress(address) || !signature) {
-    return res
-      .status(400)
-      .json({ error: "walletAddress and signature are required" });
+    return res.status(400).json({ error: "walletAddress and signature are required" });
   }
   const lower = address.toLowerCase();
   const entry = nonces.get(lower);
   nonces.delete(lower); // single use, even when the signature is wrong
   if (!entry || entry.expires < Date.now()) {
-    return res
-      .status(401)
-      .json({ error: "Sign-in expired. Please try again." });
+    return res.status(401).json({ error: "Sign-in expired. Please try again." });
   }
   let recovered: string;
   try {
-    recovered = ethers.verifyMessage(
-      loginMessage(lower, entry.nonce),
-      signature,
-    );
+    recovered = ethers.verifyMessage(loginMessage(lower, entry.nonce), signature);
   } catch {
     return res.status(401).json({ error: "Invalid signature" });
   }
   if (recovered.toLowerCase() !== lower) {
-    return res
-      .status(401)
-      .json({ error: "Signature does not match this wallet" });
+    return res.status(401).json({ error: "Signature does not match this wallet" });
   }
   const token = sign({ w: lower, exp: Date.now() + TOKEN_TTL_MS });
   res.json({ token, walletAddress: lower });
@@ -121,11 +107,7 @@ export function loginHandler(req: Request, res: Response) {
 // ---------- Middleware ----------
 
 /** Rejects the request unless it carries a valid token. Sets req.wallet. */
-export function requireWallet(
-  req: AuthedRequest,
-  res: Response,
-  next: NextFunction,
-) {
+export function requireWallet(req: AuthedRequest, res: Response, next: NextFunction) {
   const header = req.headers.authorization ?? "";
   const token = header.startsWith("Bearer ") ? header.slice(7) : "";
   const payload = token ? verifyToken(token) : null;
@@ -136,15 +118,26 @@ export function requireWallet(
   next();
 }
 
+/** Use after requireWallet. Only the HEC wallet recorded in the contract may pass. */
+export async function requireHec(req: AuthedRequest, res: Response, next: NextFunction) {
+  try {
+    const hec = (await getHecAddress()).toLowerCase();
+    if (req.wallet !== hec) {
+      return res.status(403).json({ error: "Only the HEC wallet can do this" });
+    }
+    next();
+  } catch (err: any) {
+    res.status(500).json({ error: `Could not read the HEC address: ${err.message}` });
+  }
+}
+
 /**
  * Use after requireWallet on routes that act for one institution.
  * `getCode` reads the institution code from the request, for example
  *   requireInstitutionOwner((req) => String(req.query.institutionCode))
  *   requireInstitutionOwner((req) => req.body.institution)
  */
-export function requireInstitutionOwner(
-  getCode: (req: Request) => string | undefined,
-) {
+export function requireInstitutionOwner(getCode: (req: Request) => string | undefined) {
   return async (req: AuthedRequest, res: Response, next: NextFunction) => {
     try {
       const code = (getCode(req) ?? "").trim().toUpperCase();
@@ -155,17 +148,14 @@ export function requireInstitutionOwner(
       const inst = result.rows[0];
       if (!inst) return res.status(404).json({ error: "Unknown institution" });
       if (inst.accreditation_status !== "ACCREDITED") {
-        return res.status(403).json({ error: "Institution is not accredited" });
+        return res.status(403).json({
+          error: `Institution is not accredited (status: ${inst.accreditation_status})`,
+        });
       }
-      if (
-        !inst.wallet_address ||
-        inst.wallet_address.toLowerCase() !== req.wallet
-      ) {
+      if (!inst.wallet_address || inst.wallet_address.toLowerCase() !== req.wallet) {
         return res
           .status(403)
-          .json({
-            error: "This wallet is not the registrar for that institution",
-          });
+          .json({ error: "This wallet is not the registrar for that institution" });
       }
       next();
     } catch (err: any) {

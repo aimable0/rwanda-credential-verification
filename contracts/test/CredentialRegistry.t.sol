@@ -7,72 +7,175 @@ import "../src/CredentialRegistry.sol";
 contract CredentialRegistryTest is Test {
     CredentialRegistry public registry;
 
-    // Mocked institutions per Section 1.5 Project Scope
-    address public universityA = makeAddr("UniversityA");
-    address public universityB = makeAddr("UniversityB");
+    address public hec = address(0xEC);
+    address public univA = address(0x1111);
+    address public univB = address(0x2222);
+    address public outsider = address(0x9999);
 
-    bytes32 public sampleHash =
-        sha256(
-            abi.encodePacked(
-                "ALU|RW-ALU-2023-001|AIMABLE NKURIKIYIMANA|BACHELOR OF SCIENCE|SOFTWARE ENGINEERING|FIRST_CLASS_HONOURS|2023-11-17|random_salt_123"
-            )
-        );
-    string public sampleRefCode = "RW-UNIVA-001";
+    // Redeclared so the test also compiles on Solidity 0.8.20 (events cannot be
+    // referenced through the contract name before 0.8.21)
+    event IssuerAccredited(address indexed issuer, uint256 timestamp);
+
+    bytes32 public sampleHash = keccak256("UNIVA|220001624|HOLDER|BSC|SE|FIRST_CLASS_HONOURS|2026-06-15");
+    string public sampleRef = "220001624";
 
     function setUp() public {
-        registry = new CredentialRegistry();
+        registry = new CredentialRegistry(hec);
+        vm.startPrank(hec);
+        registry.accreditIssuer(univA);
+        registry.accreditIssuer(univB);
+        vm.stopPrank();
     }
 
-    function test_IssueCredential_Success() public {
-        vm.warp(1780000000); // Set deterministic block timestamp
-        vm.prank(universityA);
-        registry.issueCredential(sampleHash, sampleRefCode);
+    // ---------- HEC control ----------
 
-        (
-            bytes32 anchoredHash,
-            address issuer,
-            uint256 issuedAt,
-            uint256 revocationTimestamp,
-            bool exists
-        ) = registry.getRecordByReferenceCode(sampleRefCode);
+    function testHecIsSetFromConstructor() public view {
+        assertEq(registry.hec(), hec);
+    }
+
+    function testConstructorRejectsZeroHec() public {
+        vm.expectRevert(CredentialRegistry.ZeroAddress.selector);
+        new CredentialRegistry(address(0));
+    }
+
+    function testOnlyHecCanAccredit() public {
+        vm.prank(univA);
+        vm.expectRevert(CredentialRegistry.NotHec.selector);
+        registry.accreditIssuer(outsider);
+    }
+
+    function testOnlyHecCanSuspend() public {
+        vm.prank(univA);
+        vm.expectRevert(CredentialRegistry.NotHec.selector);
+        registry.suspendIssuer(univB);
+    }
+
+    function testAccreditEmitsEvent() public {
+        vm.expectEmit(true, false, false, true);
+        emit IssuerAccredited(outsider, block.timestamp);
+        vm.prank(hec);
+        registry.accreditIssuer(outsider);
+        assertTrue(registry.accreditedIssuers(outsider));
+    }
+
+    // ---------- Issuance ----------
+
+    function testAccreditedIssuerCanIssueAndVerify() public {
+        vm.prank(univA);
+        registry.issueCredential(sampleHash, sampleRef);
+
+        (bytes32 credHash, address issuer, uint256 issuedAt, uint256 revokedAt, bool exists) =
+            registry.getRecordByReferenceCode(sampleRef);
 
         assertTrue(exists);
-        assertEq(anchoredHash, sampleHash);
-        assertEq(issuer, universityA);
-        assertEq(issuedAt, 1780000000);
-        assertEq(revocationTimestamp, 0);
+        assertEq(credHash, sampleHash);
+        assertEq(issuer, univA);
+        assertGt(issuedAt, 0);
+        assertEq(revokedAt, 0);
     }
 
-    function test_RevokeCredential_ByOriginalIssuer() public {
-        vm.prank(universityA);
-        registry.issueCredential(sampleHash, sampleRefCode);
-
-        vm.warp(1780050000);
-        vm.prank(universityA);
-        registry.revoke(sampleHash);
-
-        uint256 revTime = registry.checkStatus(sampleHash);
-        assertEq(revTime, 1780050000);
-
-        (, , , uint256 revocationTimestamp, ) = registry
-            .getRecordByReferenceCode(sampleRefCode);
-        assertEq(revocationTimestamp, 1780050000);
+    function testUnaccreditedWalletCannotIssue() public {
+        vm.prank(outsider);
+        vm.expectRevert(CredentialRegistry.NotAccreditedIssuer.selector);
+        registry.issueCredential(sampleHash, sampleRef);
     }
 
-    function test_RevertWhen_AnotherInstitutionTriesToRevoke() public {
-        vm.prank(universityA);
-        registry.issueCredential(sampleHash, sampleRefCode);
+    function testSuspendedIssuerCannotIssueNewButOldStaysValid() public {
+        vm.prank(univA);
+        registry.issueCredential(sampleHash, sampleRef);
 
-        // University B attempts to revoke University A's credential -> must revert
-        vm.prank(universityB);
+        vm.prank(hec);
+        registry.suspendIssuer(univA);
+
+        vm.prank(univA);
+        vm.expectRevert(CredentialRegistry.NotAccreditedIssuer.selector);
+        registry.issueCredential(keccak256("other"), "OTHER-1");
+
+        (, , , uint256 revokedAt, bool exists) = registry.getRecordByReferenceCode(sampleRef);
+        assertTrue(exists);
+        assertEq(revokedAt, 0);
+    }
+
+    function testReinstatedIssuerCanIssueAgain() public {
+        vm.startPrank(hec);
+        registry.suspendIssuer(univA);
+        registry.accreditIssuer(univA);
+        vm.stopPrank();
+
+        vm.prank(univA);
+        registry.issueCredential(sampleHash, sampleRef);
+    }
+
+    function testDuplicateReferenceCodeReverts() public {
+        vm.prank(univA);
+        registry.issueCredential(sampleHash, sampleRef);
+
+        vm.prank(univB);
+        vm.expectRevert(CredentialRegistry.ReferenceCodeAlreadyUsed.selector);
+        registry.issueCredential(keccak256("different"), sampleRef);
+    }
+
+    function testDuplicateHashReverts() public {
+        vm.prank(univA);
+        registry.issueCredential(sampleHash, sampleRef);
+
+        vm.prank(univB);
+        vm.expectRevert(CredentialRegistry.HashAlreadyAnchored.selector);
+        registry.issueCredential(sampleHash, "ANOTHER-REF");
+    }
+
+    function testEmptyInputsRevert() public {
+        vm.startPrank(univA);
+        vm.expectRevert(CredentialRegistry.InvalidCredentialHash.selector);
+        registry.issueCredential(bytes32(0), sampleRef);
+        vm.expectRevert(CredentialRegistry.EmptyReferenceCode.selector);
+        registry.issueCredential(sampleHash, "");
+        vm.stopPrank();
+    }
+
+    // ---------- Revocation ----------
+
+    function testOnlyOriginalIssuerCanRevoke() public {
+        vm.prank(univA);
+        registry.issueCredential(sampleHash, sampleRef);
+
+        vm.prank(univB);
         vm.expectRevert(CredentialRegistry.UnauthorizedIssuer.selector);
-        registry.revoke(sampleHash);
+        registry.revokeCredential(sampleHash);
+
+        vm.prank(hec);
+        vm.expectRevert(CredentialRegistry.UnauthorizedIssuer.selector);
+        registry.revokeCredential(sampleHash);
+
+        vm.prank(univA);
+        registry.revokeCredential(sampleHash);
+        assertGt(registry.checkStatus(sampleHash), 0);
     }
 
-    function test_UnissuedReferenceCode_ReturnsNotFound() public view {
-        (, , , , bool exists) = registry.getRecordByReferenceCode(
-            "FAKE-REF-999"
-        );
-        assertFalse(exists);
+    function testSuspendedIssuerCanStillRevokeOwnCredential() public {
+        vm.prank(univA);
+        registry.issueCredential(sampleHash, sampleRef);
+
+        vm.prank(hec);
+        registry.suspendIssuer(univA);
+
+        vm.prank(univA);
+        registry.revokeCredential(sampleHash);
+        assertGt(registry.checkStatus(sampleHash), 0);
+    }
+
+    function testRevokeTwiceReverts() public {
+        vm.startPrank(univA);
+        registry.issueCredential(sampleHash, sampleRef);
+        registry.revokeCredential(sampleHash);
+        vm.expectRevert(CredentialRegistry.CredentialAlreadyRevoked.selector);
+        registry.revokeCredential(sampleHash);
+        vm.stopPrank();
+    }
+
+    function testRevokeUnknownReverts() public {
+        vm.prank(univA);
+        vm.expectRevert(CredentialRegistry.CredentialNotFound.selector);
+        registry.revokeCredential(sampleHash);
     }
 }

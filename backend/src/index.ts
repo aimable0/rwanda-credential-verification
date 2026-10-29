@@ -7,15 +7,18 @@ import {
   computeCredentialHash,
   computeHolderReference,
   DegreeClassification,
-  generateReferenceCode,
-  generateSalt,
   isValidIsoDate,
 } from "./utils/hash";
-import { getOnChainCredential } from "./services/blockchain";
+import {
+  getHecAddress,
+  getOnChainCredential,
+  isIssuerAccredited,
+} from "./services/blockchain";
 import {
   AuthedRequest,
   loginHandler,
   nonceHandler,
+  requireHec,
   requireInstitutionOwner,
   requireWallet,
 } from "./auth";
@@ -27,10 +30,17 @@ app.use(cors());
 app.use(express.json());
 
 // 1. Health & Config Check
-app.get("/api/health", (_req: Request, res: Response) => {
+app.get("/api/health", async (_req: Request, res: Response) => {
+  let hecAddress: string | null = null;
+  try {
+    hecAddress = await getHecAddress();
+  } catch {
+    /* contract unreachable or CONTRACT_ADDRESS wrong */
+  }
   res.json({
     status: "ok",
     contractAddress: process.env.CONTRACT_ADDRESS,
+    hecAddress,
     classifications: Object.values(DegreeClassification),
   });
 });
@@ -43,7 +53,7 @@ app.post("/api/auth/login", loginHandler);
 app.get("/api/institutions", async (_req: Request, res: Response) => {
   try {
     const result = await query(
-      "SELECT institution_id, code, name, institution_type, wallet_address, accreditation_status FROM institutions ORDER BY code ASC",
+      "SELECT institution_id, code, name, institution_type, wallet_address, accreditation_status, requested_at, decided_at FROM institutions ORDER BY code ASC",
     );
     res.json(result.rows);
   } catch (err: any) {
@@ -51,10 +61,10 @@ app.get("/api/institutions", async (_req: Request, res: Response) => {
   }
 });
 
-// 3. Register / Bind Wallet for an Institution (Gated by Simulated Accreditation Check)
-// The wallet comes from the signed token, never from the request body.
+// 3. Apply for accreditation. The applicant's wallet comes from the signed token.
+// The institution becomes PENDING until the HEC wallet approves or rejects it.
 app.post(
-  "/api/institutions/register",
+  "/api/institutions/apply",
   requireWallet,
   async (req: Request, res: Response) => {
     try {
@@ -64,68 +74,183 @@ app.post(
         return res.status(400).json({ error: "code is required" });
       }
 
-      const normalizedCode = code.trim().toUpperCase();
+      if (wallet === (await getHecAddress()).toLowerCase()) {
+        return res.status(400).json({
+          error: "The HEC wallet cannot apply as an institution. Use another account.",
+        });
+      }
 
+      const normalizedCode = code.trim().toUpperCase();
       const instResult = await query(
         "SELECT * FROM institutions WHERE code = $1",
         [normalizedCode],
       );
-
       if (instResult.rows.length === 0) {
         return res
           .status(404)
-          .json({ error: "Institution not found in HEC/NCNM registry" });
+          .json({ error: "Institution not found in the registry" });
       }
+      const inst = instResult.rows[0];
+      const sameWallet =
+        !!inst.wallet_address && inst.wallet_address.toLowerCase() === wallet;
 
-      const institution = instResult.rows[0];
-
-      // Functional Requirement 1: Gate onboarding against accreditation status
-      if (institution.accreditation_status !== "ACCREDITED") {
+      if (inst.accreditation_status === "ACCREDITED") {
+        return sameWallet
+          ? res.json({ message: `${inst.name} is already accredited`, institution: inst })
+          : res.status(403).json({
+              error: `${inst.name} (${inst.code}) is already accredited under another wallet.`,
+            });
+      }
+      if (inst.accreditation_status === "PENDING") {
+        return sameWallet
+          ? res.json({ message: `Your application for ${inst.name} is already pending`, institution: inst })
+          : res.status(403).json({
+              error: `${inst.name} (${inst.code}) already has a pending application from another wallet.`,
+            });
+      }
+      if (inst.accreditation_status === "SUSPENDED") {
         return res.status(403).json({
-          error: `Onboarding rejected: ${institution.name} (${institution.code}) is UNACCREDITED.`,
+          error: `${inst.name} (${inst.code}) is suspended. Contact HEC to be reinstated.`,
         });
       }
 
-      // An institution that already has a registrar wallet cannot be re-bound
-      if (institution.wallet_address) {
-        if (institution.wallet_address.toLowerCase() === wallet) {
-          return res.json({
-            message: `${institution.name} (${institution.code}) is already bound to this wallet`,
-            institution,
-          });
-        }
-        return res.status(403).json({
-          error: `${institution.name} (${institution.code}) is already bound to another wallet. Switch to that account in MetaMask.`,
-        });
-      }
-
-      // Check if this wallet address is already bound to a DIFFERENT institution
-      const existingWalletOwner = await query(
+      // UNREGISTERED or REJECTED: this wallet must not represent another institution
+      const other = await query(
         "SELECT code, name FROM institutions WHERE LOWER(wallet_address) = $1 AND code != $2",
         [wallet, normalizedCode],
       );
-
-      if (existingWalletOwner.rows.length > 0) {
-        const other = existingWalletOwner.rows[0];
+      if (other.rows.length > 0) {
         return res.status(409).json({
-          error: `This MetaMask wallet (${wallet.slice(0, 8)}...) is already bound to ${other.name} (${other.code}). Please switch to a second account in MetaMask to represent ${institution.name} (${institution.code}).`,
+          error: `This wallet already represents ${other.rows[0].name} (${other.rows[0].code}). Switch to another MetaMask account for ${inst.name} (${inst.code}).`,
         });
       }
 
-      // Only bind while the slot is still empty (guards against a race)
       const updated = await query(
-        "UPDATE institutions SET wallet_address = $1 WHERE institution_id = $2 AND wallet_address IS NULL RETURNING *",
-        [wallet, institution.institution_id],
+        `UPDATE institutions
+            SET wallet_address = $1, accreditation_status = 'PENDING',
+                requested_at = NOW(), decided_at = NULL
+          WHERE institution_id = $2 AND accreditation_status IN ('UNREGISTERED', 'REJECTED')
+          RETURNING *`,
+        [wallet, inst.institution_id],
       );
-
       if (updated.rows.length === 0) {
         return res.status(409).json({
-          error: `${institution.name} (${institution.code}) was just bound to a wallet. Reload and try again.`,
+          error: "This institution changed status while you applied. Reload and try again.",
         });
       }
+      res.status(201).json({
+        message: `Application for ${inst.name} (${inst.code}) sent to HEC`,
+        institution: updated.rows[0],
+      });
+    } catch (err: any) {
+      res.status(500).json({ error: err.message });
+    }
+  },
+);
 
+// The HEC admin sends the accredit/suspend transaction from MetaMask first.
+// These routes then confirm the on-chain state and mirror it into PostgreSQL.
+async function waitForChainState(wallet: string, expected: boolean) {
+  for (let i = 0; i < 8; i++) {
+    if ((await isIssuerAccredited(wallet)) === expected) return true;
+    await new Promise((r) => setTimeout(r, 2000)); // the RPC node can lag a block
+  }
+  return false;
+}
+
+async function loadInstitution(code: string) {
+  const r = await query("SELECT * FROM institutions WHERE code = $1", [
+    String(code).trim().toUpperCase(),
+  ]);
+  return r.rows[0] ?? null;
+}
+
+// 3a. Approve (or reinstate): the accreditIssuer transaction must already be on-chain
+app.post(
+  "/api/admin/institutions/:code/approve",
+  requireWallet,
+  requireHec,
+  async (req: Request, res: Response) => {
+    try {
+      const inst = await loadInstitution(req.params.code as string);
+      if (!inst) return res.status(404).json({ error: "Institution not found" });
+      if (!["PENDING", "SUSPENDED"].includes(inst.accreditation_status) || !inst.wallet_address) {
+        return res.status(409).json({
+          error: `${inst.code} is ${inst.accreditation_status} and cannot be approved now.`,
+        });
+      }
+      if (!(await waitForChainState(inst.wallet_address, true))) {
+        return res.status(409).json({
+          error: "The contract does not list this wallet yet. Send the accreditIssuer transaction first.",
+        });
+      }
+      const updated = await query(
+        "UPDATE institutions SET accreditation_status = 'ACCREDITED', decided_at = NOW() WHERE institution_id = $1 RETURNING *",
+        [inst.institution_id],
+      );
       res.json({
-        message: `${institution.name} (${institution.code}) accredited and bound to wallet ${wallet.slice(0, 8)}...`,
+        message: `${inst.name} (${inst.code}) is now accredited`,
+        institution: updated.rows[0],
+      });
+    } catch (err: any) {
+      res.status(500).json({ error: err.message });
+    }
+  },
+);
+
+// 3b. Reject a pending application (off-chain, no gas)
+app.post(
+  "/api/admin/institutions/:code/reject",
+  requireWallet,
+  requireHec,
+  async (req: Request, res: Response) => {
+    try {
+      const inst = await loadInstitution(req.params.code as string);
+      if (!inst) return res.status(404).json({ error: "Institution not found" });
+      if (inst.accreditation_status !== "PENDING") {
+        return res.status(409).json({
+          error: `${inst.code} is ${inst.accreditation_status}. Only pending applications can be rejected.`,
+        });
+      }
+      const updated = await query(
+        "UPDATE institutions SET accreditation_status = 'REJECTED', decided_at = NOW() WHERE institution_id = $1 RETURNING *",
+        [inst.institution_id],
+      );
+      res.json({
+        message: `Application from ${inst.name} (${inst.code}) rejected`,
+        institution: updated.rows[0],
+      });
+    } catch (err: any) {
+      res.status(500).json({ error: err.message });
+    }
+  },
+);
+
+// 3c. Suspend an accredited institution: the suspendIssuer transaction must already be on-chain
+app.post(
+  "/api/admin/institutions/:code/suspend",
+  requireWallet,
+  requireHec,
+  async (req: Request, res: Response) => {
+    try {
+      const inst = await loadInstitution(req.params.code as string);
+      if (!inst) return res.status(404).json({ error: "Institution not found" });
+      if (inst.accreditation_status !== "ACCREDITED" || !inst.wallet_address) {
+        return res.status(409).json({
+          error: `${inst.code} is ${inst.accreditation_status}. Only accredited institutions can be suspended.`,
+        });
+      }
+      if (!(await waitForChainState(inst.wallet_address, false))) {
+        return res.status(409).json({
+          error: "The contract still lists this wallet. Send the suspendIssuer transaction first.",
+        });
+      }
+      const updated = await query(
+        "UPDATE institutions SET accreditation_status = 'SUSPENDED', decided_at = NOW() WHERE institution_id = $1 RETURNING *",
+        [inst.institution_id],
+      );
+      res.json({
+        message: `${inst.name} (${inst.code}) suspended`,
         institution: updated.rows[0],
       });
     } catch (err: any) {
@@ -135,7 +260,7 @@ app.post(
 );
 
 // 4. Issuance Step (Figure 3.5a Steps 2-5):
-// Checks accreditation, generates salt + SHA-256 hash + reference code + QR code
+// Checks accreditation, generates SHA-256 hash + QR code from the certificate number
 // Only the registrar wallet bound to the institution may call this.
 app.post(
   "/api/credentials/prepare",
@@ -156,6 +281,8 @@ app.post(
 
       if (
         !institution ||
+        !credentialId ||
+        !credentialId.trim() ||
         !holderName ||
         !degreeTitle ||
         !classification ||
@@ -163,7 +290,7 @@ app.post(
       ) {
         return res.status(400).json({
           error:
-            "Missing required fields: institution, holderName, degreeTitle, classification, awardDate",
+            "Missing required fields: institution, credentialId (the unique number printed on the certificate), holderName, degreeTitle, classification, awardDate",
         });
       }
 
@@ -171,6 +298,13 @@ app.post(
         return res
           .status(400)
           .json({ error: "awardDate must be in ISO format YYYY-MM-DD" });
+      }
+
+      // The contract is the source of truth: HEC must currently list this wallet
+      if (!(await isIssuerAccredited((req as AuthedRequest).wallet as string))) {
+        return res.status(403).json({
+          error: "HEC has not accredited this wallet on-chain, so it cannot anchor credentials.",
+        });
       }
 
       // Step 3 (Figure 3.5a): Check institution accreditation status
@@ -188,13 +322,9 @@ app.post(
 
       const instRecord = instRes.rows[0];
 
-      // Step 4 (Figure 3.5a): Generate referenceCode (if certificate has none) and random salt
-      const finalReferenceCode =
-        credentialId && credentialId.trim().length > 0
-          ? credentialId.trim().toUpperCase()
-          : generateReferenceCode(instRecord.code, awardDate);
-
-      const salt = generateSalt();
+      // Step 4 (Figure 3.5a): The unique number printed on the certificate is the reference code.
+      // It is part of the hashed fields and does the job a random salt used to do.
+      const finalReferenceCode = credentialId.trim().toUpperCase();
 
       const credentialHash = computeCredentialHash(
         {
@@ -206,22 +336,23 @@ app.post(
           classification,
           awardDate,
         },
-        salt,
       );
 
-      const holderReference = computeHolderReference(holderName, salt);
+      const holderReference = computeHolderReference(
+        holderName,
+        finalReferenceCode,
+      );
 
-      // Save non-PII credential record (salt + hash + reference_code) in PostgreSQL
+      // Save non-PII credential record (hash + reference_code) in PostgreSQL
       const dbInsert = await query(
         `INSERT INTO credentials
-          (institution_id, reference_code, credential_hash, salt, holder_reference, issuance_date, credential_type)
-         VALUES ($1, $2, $3, $4, $5, $6, $7)
+          (institution_id, reference_code, credential_hash, holder_reference, issuance_date, credential_type)
+         VALUES ($1, $2, $3, $4, $5, $6)
          RETURNING credential_id, reference_code, credential_hash, holder_reference, issuance_date, credential_type`,
         [
           instRecord.institution_id,
           finalReferenceCode,
           credentialHash,
-          salt,
           holderReference,
           awardDate,
           credentialType,
@@ -282,7 +413,7 @@ app.get(
 );
 
 // 6. Verification Endpoint (Figure 3.5b Steps 2-12):
-// Mandatory field re-entry + reference code -> retrieve salt -> recompute hash -> check Sepolia contract -> log result
+// Mandatory field re-entry + reference code -> recompute hash -> check Sepolia contract -> log result
 app.post("/api/credentials/verify", async (req: Request, res: Response) => {
   const startTime = Date.now();
   try {
@@ -317,7 +448,7 @@ app.post("/api/credentials/verify", async (req: Request, res: Response) => {
       });
     }
 
-    // Step 3 (Figure 3.5b): Retrieve salt for reference_code from PostgreSQL
+    // Step 3 (Figure 3.5b): Look up the stored record for this reference_code
     const credRes = await query(
       "SELECT * FROM credentials WHERE reference_code = $1",
       [lookupCode],
@@ -332,7 +463,7 @@ app.post("/api/credentials/verify", async (req: Request, res: Response) => {
     if (credRes.rows.length > 0) {
       const dbRecord = credRes.rows[0];
 
-      // Step 4 (Figure 3.5b): Recompute hash from entered fields + stored salt
+      // Step 4 (Figure 3.5b): Recompute the hash from the entered fields (the certificate number is one of the hashed fields)
       const recomputedHash = computeCredentialHash(
         {
           institution,
@@ -343,7 +474,6 @@ app.post("/api/credentials/verify", async (req: Request, res: Response) => {
           classification,
           awardDate,
         },
-        dbRecord.salt,
       );
 
       // Steps 5-8 (Figure 3.5b): Query anchored hash and revocation status from Sepolia Smart Contract
@@ -387,7 +517,7 @@ app.post("/api/credentials/verify", async (req: Request, res: Response) => {
         revocationTimestamp: onChain.exists ? onChain.revocationTimestamp : 0,
       };
     } else {
-      // Reference code not found in off-chain salt table -> still check chain for completeness
+      // Reference code not found in the off-chain table -> still check chain for completeness
       const onChain = await getOnChainCredential(lookupCode);
       outcome = "MISMATCH_OR_NOT_FOUND";
       details = {
@@ -420,8 +550,8 @@ app.post("/api/credentials/verify", async (req: Request, res: Response) => {
   }
 });
 
-// 7. Get Evaluation Logs (Supports Section 3.2.4 Metrics for Evaluation)
-app.get("/api/logs", async (_req: Request, res: Response) => {
+// 7. Get Evaluation Logs (Supports Section 3.2.4 Metrics for Evaluation). HEC wallet only.
+app.get("/api/logs", requireWallet, requireHec, async (_req: Request, res: Response) => {
   try {
     const logs = await query(
       "SELECT * FROM verification_logs ORDER BY timestamp DESC LIMIT 100",

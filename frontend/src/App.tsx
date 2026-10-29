@@ -1,9 +1,8 @@
-import React, { useEffect, useState } from "react";
+import React, { useEffect, useRef, useState } from "react";
 import {
   BrowserRouter,
   Routes,
   Route,
-  Navigate,
   Link,
   useNavigate,
   useParams,
@@ -20,6 +19,8 @@ const DEFAULT_CONTRACT_ADDRESS = "0xAaf295EB2b31AC3eFeB0961e0f7E403A462ea590";
 const REGISTRY_ABI = [
   "function issueCredential(bytes32 _credentialHash, string calldata _referenceCode) external",
   "function revokeCredential(bytes32 _credentialHash) external",
+  "function accreditIssuer(address _issuer) external",
+  "function suspendIssuer(address _issuer) external",
   "function getRecordByReferenceCode(string calldata _referenceCode) external view returns (bytes32 credentialHash, address issuer, uint256 issuedAt, uint256 revocationTimestamp, bool exists)",
 ];
 
@@ -44,6 +45,8 @@ export interface Institution {
   institution_type: string;
   wallet_address: string | null;
   accreditation_status: string;
+  requested_at?: string | null;
+  decided_at?: string | null;
 }
 
 interface CredentialRow {
@@ -303,29 +306,47 @@ function ThemeToggle({
 
 /* ---------- Top bar and footer ---------- */
 
-// Context-aware header: hides internal navigation on the public /verify page
+type Area = "landing" | "verifier" | "institution" | "admin";
+
+// Each role gets its own area, header and navigation
+function areaFor(pathname: string): Area {
+  if (pathname === "/") return "landing";
+  if (pathname.startsWith("/verify")) return "verifier";
+  if (pathname.startsWith("/admin") || pathname.startsWith("/logs"))
+    return "admin";
+  return "institution"; // /register and /:university/issue_degree
+}
+
 function Header({
   walletAddress,
+  institutions,
   connectWallet,
   theme,
   onToggleTheme,
 }: {
   walletAddress: string;
+  institutions: Institution[];
   connectWallet: () => Promise<void>;
   theme: Theme;
   onToggleTheme: () => void;
 }) {
-  const location = useLocation();
-  const isVerifierPage = location.pathname.startsWith("/verify");
-  const isPortalActive =
-    location.pathname === "/register"
-      ? true
-      : location.pathname.includes("/issue_degree");
+  const path = useLocation().pathname;
+  const area = areaFor(path);
+  const myInst = institutions.find(
+    (i) =>
+      sameAddress(i.wallet_address, walletAddress) &&
+      i.accreditation_status === "ACCREDITED",
+  );
+  const link = (to: string, active: boolean, label: string) => (
+    <Link to={to} className={`nav-link ${active ? "active" : ""}`}>
+      {label}
+    </Link>
+  );
 
   return (
     <header className="topbar">
       <div className="topbar-inner">
-        <Link to="/register" className="brand">
+        <Link to="/" className="brand">
           <BrandMark />
           <span>
             <span className="brand-name">Rwanda Credential Verification</span>
@@ -333,31 +354,32 @@ function Header({
           </span>
         </Link>
 
-        {!isVerifierPage && (
-          <nav className="nav" aria-label="Main">
-            <Link
-              to="/register"
-              className={`nav-link ${isPortalActive ? "active" : ""}`}
-            >
-              Institution portal
-            </Link>
-            <Link
-              to="/verify"
-              className={`nav-link ${isVerifierPage ? "active" : ""}`}
-            >
-              Public verifier
-            </Link>
-            <Link
-              to="/logs"
-              className={`nav-link ${location.pathname.startsWith("/logs") ? "active" : ""}`}
-            >
-              Evaluation logs
-            </Link>
+        {area === "institution" && (
+          <nav className="nav" aria-label="Institution">
+            {link("/register", path === "/register", "My institution")}
+            {myInst &&
+              link(
+                `/${myInst.code}/issue_degree`,
+                path.endsWith("/issue_degree"),
+                "Issue credentials",
+              )}
+          </nav>
+        )}
+
+        {area === "admin" && (
+          <nav className="nav" aria-label="HEC admin">
+            {link("/admin", path.startsWith("/admin"), "Applications")}
+            {link("/logs", path.startsWith("/logs"), "Evaluation logs")}
           </nav>
         )}
 
         <div className="topbar-actions">
-          {!isVerifierPage &&
+          {area === "verifier" && (
+            <Link to="/" className="btn btn-ghost btn-sm">
+              Institution or HEC sign in
+            </Link>
+          )}
+          {(area === "institution" || area === "admin") &&
             (walletAddress ? (
               <button
                 type="button"
@@ -379,6 +401,54 @@ function Header({
   );
 }
 
+/* ---------- Landing ---------- */
+
+function Landing() {
+  return (
+    <>
+      <PageHead title="Rwanda Credential Verification">
+        Degrees and licences are anchored on Ethereum Sepolia by institutions
+        that HEC has accredited. Choose how you want to use the platform.
+      </PageHead>
+
+      <div className="role-grid">
+        <section className="role-card">
+          <h2 className="panel-title">Verify a credential</h2>
+          <p className="panel-text">
+            For employers, schools and anyone checking a certificate. No wallet
+            or account is needed.
+          </p>
+          <Link to="/verify" className="btn btn-blue">
+            Verify a credential
+          </Link>
+        </section>
+
+        <section className="role-card">
+          <h2 className="panel-title">Institution</h2>
+          <p className="panel-text">
+            Apply for HEC accreditation, then issue and revoke credentials.
+            Needs your institution's MetaMask wallet.
+          </p>
+          <Link to="/register" className="btn">
+            Institution sign in
+          </Link>
+        </section>
+
+        <section className="role-card">
+          <h2 className="panel-title">HEC admin</h2>
+          <p className="panel-text">
+            Review applications, accredit or suspend institutions, and read the
+            evaluation logs. Needs the HEC wallet.
+          </p>
+          <Link to="/admin" className="btn">
+            HEC sign in
+          </Link>
+        </section>
+      </div>
+    </>
+  );
+}
+
 function Footer({ contractAddress }: { contractAddress: string }) {
   return (
     <footer className="footer">
@@ -396,11 +466,30 @@ function Footer({ contractAddress }: { contractAddress: string }) {
   );
 }
 
+/* ---------- Accreditation status ---------- */
+
+const STATUS_META: Record<string, { label: string; tone: Tone | "muted" }> = {
+  UNREGISTERED: { label: "Not registered", tone: "muted" },
+  PENDING: { label: "Pending HEC review", tone: "warn" },
+  ACCREDITED: { label: "Accredited", tone: "ok" },
+  REJECTED: { label: "Rejected", tone: "bad" },
+  SUSPENDED: { label: "Suspended", tone: "bad" },
+};
+
+function StatusBadge({ status }: { status: string }) {
+  const m = STATUS_META[status] ?? {
+    label: sentence(status),
+    tone: "muted" as const,
+  };
+  return <span className={`badge tone-${m.tone}`}>{m.label}</span>;
+}
+
 /* ---------- Register ---------- */
 
 function RegisterPage({
   institutions,
   walletAddress,
+  hecAddress,
   connectWallet,
   refreshInstitutions,
   backendError,
@@ -408,12 +497,12 @@ function RegisterPage({
 }: {
   institutions: Institution[];
   walletAddress: string;
+  hecAddress: string | null;
   connectWallet: () => Promise<void>;
   refreshInstitutions: () => Promise<void>;
   backendError: string | null;
   authFetch: AuthFetch;
 }) {
-  const navigate = useNavigate();
   const [selectedCode, setSelectedCode] = useState<string>("UNIVA");
   const [statusMsg, setStatusMsg] = useState<{
     type: "ok" | "err";
@@ -422,10 +511,48 @@ function RegisterPage({
   const [loading, setLoading] = useState(false);
 
   const selectedInst = institutions.find((i) => i.code === selectedCode);
-  const boundToOther =
+  const isHec = sameAddress(walletAddress, hecAddress);
+  const status = selectedInst?.accreditation_status ?? "UNREGISTERED";
+  const mine = sameAddress(walletAddress, selectedInst?.wallet_address);
+  const myInstitutions = institutions.filter((i) =>
+    sameAddress(walletAddress, i.wallet_address),
+  );
+  const canApply =
     !!walletAddress &&
-    !!selectedInst?.wallet_address &&
-    !sameAddress(walletAddress, selectedInst.wallet_address);
+    !isHec &&
+    (status === "UNREGISTERED" || status === "REJECTED");
+
+  let hint: { tone: Tone; text: string } | null = null;
+  if (isHec) {
+    hint = {
+      tone: "warn",
+      text: "You are connected as the HEC wallet. Review applications on the HEC admin tab.",
+    };
+  } else if (status === "PENDING") {
+    hint = {
+      tone: "warn",
+      text: mine
+        ? "Your application is waiting for HEC review."
+        : `${selectedCode} has a pending application from another wallet.`,
+    };
+  } else if (status === "ACCREDITED") {
+    hint = mine
+      ? { tone: "ok", text: "Accredited. Open your portal from the table below." }
+      : {
+          tone: "warn",
+          text: `${selectedCode} is accredited under another wallet.`,
+        };
+  } else if (status === "SUSPENDED") {
+    hint = {
+      tone: "bad",
+      text: `HEC has suspended ${selectedCode}. Contact HEC to be reinstated.`,
+    };
+  } else if (status === "REJECTED" && mine) {
+    hint = {
+      tone: "bad",
+      text: "HEC rejected your last application. You can apply again.",
+    };
+  }
 
   useEffect(() => {
     if (
@@ -436,29 +563,21 @@ function RegisterPage({
     }
   }, [institutions, selectedCode]);
 
-  async function handleRegister(e: React.FormEvent) {
+  async function handleApply(e: React.FormEvent) {
     e.preventDefault();
     setStatusMsg(null);
 
     if (!walletAddress) {
       setStatusMsg({
         type: "err",
-        text: "Please connect your Registrar MetaMask wallet first.",
-      });
-      return;
-    }
-
-    if (boundToOther) {
-      setStatusMsg({
-        type: "err",
-        text: `${selectedCode} is already bound to another wallet. Switch to that account to continue.`,
+        text: "Please connect your institution's MetaMask wallet first.",
       });
       return;
     }
 
     setLoading(true);
     try {
-      const res = await authFetch(`${API_BASE}/institutions/register`, {
+      const res = await authFetch(`${API_BASE}/institutions/apply`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ code: selectedCode }),
@@ -467,20 +586,14 @@ function RegisterPage({
       if (!res.ok) {
         setStatusMsg({
           type: "err",
-          text: data.error ?? "Registration failed",
+          text: data.error ?? "Application failed",
         });
       } else {
-        setStatusMsg({
-          type: "ok",
-          text: `${data.message}. Redirecting to /${selectedCode}/issue_degree...`,
-        });
+        setStatusMsg({ type: "ok", text: data.message });
         await refreshInstitutions();
-        setTimeout(() => {
-          navigate(`/${selectedCode}/issue_degree`);
-        }, 900);
       }
     } catch (err: any) {
-      setStatusMsg({ type: "err", text: err.message });
+      setStatusMsg({ type: "err", text: err.shortMessage ?? err.message });
     } finally {
       setLoading(false);
     }
@@ -488,10 +601,10 @@ function RegisterPage({
 
   return (
     <>
-      <PageHead title="Institution onboarding">
-        Institutions are checked against simulated HEC and NCNM accreditation
-        records. Only accredited institutions can bind a registrar wallet and
-        open their issuing portal.
+      <PageHead title="Institution portal">
+        Apply for HEC accreditation with your registrar wallet. Once HEC
+        approves, your wallet is added to the accredited issuer list on the
+        contract and your issuing portal opens below.
       </PageHead>
 
       {backendError && (
@@ -502,13 +615,13 @@ function RegisterPage({
 
       <div className="stack">
         <section className="panel">
-          <h2 className="panel-title">Bind your registrar wallet</h2>
+          <h2 className="panel-title">Apply for accreditation</h2>
           <p className="panel-text">
-            Choose your institution, connect MetaMask, then confirm
-            accreditation.
+            Choose your institution and connect the wallet that will issue its
+            credentials.
           </p>
 
-          <form onSubmit={handleRegister}>
+          <form onSubmit={handleApply}>
             <div className="inline-form">
               <label className="field">
                 <span className="field-label">Institution</span>
@@ -518,7 +631,10 @@ function RegisterPage({
                 >
                   {institutions.map((inst) => (
                     <option key={inst.code} value={inst.code}>
-                      {inst.code} - {inst.name} ({inst.accreditation_status})
+                      {inst.code} - {inst.name} (
+                      {STATUS_META[inst.accreditation_status]?.label ??
+                        sentence(inst.accreditation_status)}
+                      )
                     </option>
                   ))}
                 </select>
@@ -536,27 +652,16 @@ function RegisterPage({
                 <button
                   type="submit"
                   className="btn btn-blue"
-                  disabled={loading ? true : institutions.length === 0 || boundToOther}
+                  disabled={loading || !canApply}
                 >
                   {loading && <Spinner />}
-                  {loading
-                    ? "Checking accreditation"
-                    : "Verify accreditation and continue"}
+                  {loading ? "Sending application" : "Apply to HEC"}
                 </button>
               )}
             </div>
           </form>
 
-          {boundToOther && selectedInst?.wallet_address && (
-            <Notice tone="warn" title="Wallet mismatch.">
-              {selectedCode} is bound to{" "}
-              <span className="mono">
-                {shortAddr(selectedInst.wallet_address, 8, 6)}
-              </span>
-              . Click your wallet pill in the top bar to switch to that
-              account.
-            </Notice>
-          )}
+          {hint && <Notice tone={hint.tone}>{hint.text}</Notice>}
 
           {statusMsg && (
             <Notice tone={statusMsg.type === "ok" ? "ok" : "bad"}>
@@ -566,74 +671,232 @@ function RegisterPage({
         </section>
 
         <section className="panel">
-          <h2 className="panel-title">Registered institutions</h2>
+          <h2 className="panel-title">Open portal</h2>
           <p className="panel-text">
-            Each accredited institution with a bound wallet has its own issuing
-            portal.
+            Your issuing portal opens once HEC accredits your institution.
           </p>
+
+          {!walletAddress ? (
+            <div className="empty">
+              <p>Connect your wallet to see your institution.</p>
+              <button
+                type="button"
+                className="btn btn-blue btn-sm"
+                onClick={connectWallet}
+              >
+                Connect MetaMask
+              </button>
+            </div>
+          ) : isHec ? (
+            <Notice tone="warn">
+              You are connected as the HEC wallet, which has no institution
+              portal. <Link to="/admin">Go to HEC admin</Link>
+            </Notice>
+          ) : myInstitutions.length === 0 ? (
+            <div className="empty">
+              <p>
+                No institution is linked to this wallet yet. Send an
+                application above.
+              </p>
+            </div>
+          ) : (
+            <div className="stack" style={{ gap: 12 }}>
+              {myInstitutions.map((i) => (
+                <div className="portal-card" key={i.code}>
+                  <div>
+                    <strong>
+                      {i.name} ({i.code})
+                    </strong>
+                    <div className="muted mono" style={{ marginTop: 4 }}>
+                      {i.wallet_address}
+                    </div>
+                  </div>
+                  <div className="portal-actions">
+                    <StatusBadge status={i.accreditation_status} />
+                    {i.accreditation_status === "ACCREDITED" ? (
+                      <Link
+                        to={`/${i.code}/issue_degree`}
+                        className="btn btn-blue btn-sm"
+                      >
+                        Open portal
+                      </Link>
+                    ) : (
+                      <span className="muted">
+                        {i.accreditation_status === "PENDING"
+                          ? "Waiting for HEC"
+                          : i.accreditation_status === "SUSPENDED"
+                            ? "Suspended by HEC"
+                            : "Rejected by HEC"}
+                      </span>
+                    )}
+                  </div>
+                </div>
+              ))}
+            </div>
+          )}
+        </section>
+      </div>
+    </>
+  );
+}
+
+/* ---------- HEC admin ---------- */
+
+function AdminPage({
+  institutions,
+  walletAddress,
+  hecAddress,
+  contractAddress,
+  connectWallet,
+  refreshInstitutions,
+  authFetch,
+  token,
+  signIn,
+}: {
+  institutions: Institution[];
+  walletAddress: string;
+  hecAddress: string | null;
+  contractAddress: string;
+  connectWallet: () => Promise<void>;
+  refreshInstitutions: () => Promise<void>;
+  authFetch: AuthFetch;
+  token: string | null;
+  signIn: () => Promise<string>;
+}) {
+  const [busy, setBusy] = useState<string | null>(null);
+  const [msg, setMsg] = useState<{ type: "ok" | "err"; text: string } | null>(
+    null,
+  );
+  const isHec = sameAddress(walletAddress, hecAddress);
+
+  async function decide(
+    inst: Institution,
+    action: "approve" | "reject" | "suspend",
+  ) {
+    setMsg(null);
+    setBusy(inst.code);
+    try {
+      if (!token) await signIn(); // sign in first so MetaMask prompts come in a logical order
+      if (action !== "reject") {
+        if (!inst.wallet_address) {
+          throw new Error("This institution has no applicant wallet.");
+        }
+        const ethereum = (window as any).ethereum;
+        const signer = await new ethers.BrowserProvider(ethereum).getSigner(
+          walletAddress,
+        );
+        const contract = new ethers.Contract(
+          contractAddress,
+          REGISTRY_ABI,
+          signer,
+        );
+        const tx =
+          action === "approve"
+            ? await contract.accreditIssuer(inst.wallet_address)
+            : await contract.suspendIssuer(inst.wallet_address);
+        await tx.wait();
+      }
+      const res = await authFetch(
+        `${API_BASE}/admin/institutions/${inst.code}/${action}`,
+        { method: "POST" },
+      );
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error ?? "Request failed");
+      await refreshInstitutions();
+      setMsg({ type: "ok", text: data.message });
+    } catch (err: any) {
+      setMsg({ type: "err", text: err.shortMessage ?? err.message });
+    } finally {
+      setBusy(null);
+    }
+  }
+
+  if (!isHec) {
+    return (
+      <HecGate
+        walletAddress={walletAddress}
+        hecAddress={hecAddress}
+        connectWallet={connectWallet}
+      />
+    );
+  }
+
+  const pending = institutions.filter(
+    (i) => i.accreditation_status === "PENDING",
+  );
+  const accredited = institutions.filter(
+    (i) => i.accreditation_status === "ACCREDITED",
+  );
+  const closed = institutions.filter((i) =>
+    ["SUSPENDED", "REJECTED"].includes(i.accreditation_status),
+  );
+
+  const walletCell = (i: Institution) => (
+    <td className="mono">{i.wallet_address ?? "None"}</td>
+  );
+
+  return (
+    <>
+      <PageHead title="HEC admin">
+        Review institution applications. Approving sends one transaction from
+        the HEC wallet that adds the applicant's wallet to the accredited
+        issuer list on the contract.
+      </PageHead>
+
+      {msg && <Notice tone={msg.type === "ok" ? "ok" : "bad"}>{msg.text}</Notice>}
+
+      <div className="stack">
+        <section className="panel">
+          <h2 className="panel-title">Pending applications</h2>
           <div className="table-wrap">
             <table>
               <thead>
                 <tr>
                   <th>Code</th>
                   <th>Institution</th>
-                  <th>Accreditation</th>
-                  <th>Registrar wallet</th>
-                  <th>Portal</th>
+                  <th>Applicant wallet</th>
+                  <th>Requested</th>
+                  <th>Decision</th>
                 </tr>
               </thead>
               <tbody>
-                {institutions.map((i) => (
+                {pending.map((i) => (
                   <tr key={i.code}>
                     <td>
                       <strong>{i.code}</strong>
                     </td>
                     <td>{i.name}</td>
+                    {walletCell(i)}
                     <td>
-                      <span
-                        className={`badge ${
-                          i.accreditation_status === "ACCREDITED"
-                            ? "tone-ok"
-                            : "tone-bad"
-                        }`}
-                      >
-                        {sentence(i.accreditation_status)}
-                      </span>
-                    </td>
-                    <td className="mono">
-                      {i.wallet_address
-                        ? shortAddr(i.wallet_address, 8, 6)
-                        : "Not registered yet"}
+                      {i.requested_at
+                        ? new Date(i.requested_at).toLocaleString()
+                        : "-"}
                     </td>
                     <td>
-                      {i.accreditation_status === "ACCREDITED" &&
-                      i.wallet_address ? (
-                        sameAddress(walletAddress, i.wallet_address) ? (
-                          <Link
-                            to={`/${i.code}/issue_degree`}
-                            className="btn btn-ghost btn-sm"
-                          >
-                            Open portal
-                          </Link>
-                        ) : (
-                          <span className="muted">
-                            Switch to this wallet to open
-                          </span>
-                        )
-                      ) : (
-                        <span className="muted">
-                          {i.accreditation_status === "UNACCREDITED"
-                            ? "Blocked, unaccredited"
-                            : "Bind a wallet first"}
-                        </span>
-                      )}
+                      <div className="form-actions" style={{ margin: 0 }}>
+                        <button
+                          className="btn btn-blue btn-sm"
+                          disabled={busy === i.code}
+                          onClick={() => decide(i, "approve")}
+                        >
+                          {busy === i.code && <Spinner />}
+                          Approve
+                        </button>
+                        <button
+                          className="btn btn-danger btn-sm"
+                          disabled={busy === i.code}
+                          onClick={() => decide(i, "reject")}
+                        >
+                          Reject
+                        </button>
+                      </div>
                     </td>
                   </tr>
                 ))}
-                {institutions.length === 0 && (
+                {pending.length === 0 && (
                   <tr>
                     <td colSpan={5} className="cell-empty">
-                      No institutions loaded yet.
+                      No pending applications.
                     </td>
                   </tr>
                 )}
@@ -641,6 +904,97 @@ function RegisterPage({
             </table>
           </div>
         </section>
+
+        <section className="panel">
+          <h2 className="panel-title">Accredited institutions</h2>
+          <div className="table-wrap">
+            <table>
+              <thead>
+                <tr>
+                  <th>Code</th>
+                  <th>Institution</th>
+                  <th>Issuer wallet</th>
+                  <th>Action</th>
+                </tr>
+              </thead>
+              <tbody>
+                {accredited.map((i) => (
+                  <tr key={i.code}>
+                    <td>
+                      <strong>{i.code}</strong>
+                    </td>
+                    <td>{i.name}</td>
+                    {walletCell(i)}
+                    <td>
+                      <button
+                        className="btn btn-danger btn-sm"
+                        disabled={busy === i.code}
+                        onClick={() => decide(i, "suspend")}
+                      >
+                        {busy === i.code && <Spinner />}
+                        Suspend
+                      </button>
+                    </td>
+                  </tr>
+                ))}
+                {accredited.length === 0 && (
+                  <tr>
+                    <td colSpan={4} className="cell-empty">
+                      No accredited institutions yet.
+                    </td>
+                  </tr>
+                )}
+              </tbody>
+            </table>
+          </div>
+        </section>
+
+        {closed.length > 0 && (
+          <section className="panel">
+            <h2 className="panel-title">Suspended and rejected</h2>
+            <div className="table-wrap">
+              <table>
+                <thead>
+                  <tr>
+                    <th>Code</th>
+                    <th>Institution</th>
+                    <th>Status</th>
+                    <th>Wallet</th>
+                    <th>Action</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {closed.map((i) => (
+                    <tr key={i.code}>
+                      <td>
+                        <strong>{i.code}</strong>
+                      </td>
+                      <td>{i.name}</td>
+                      <td>
+                        <StatusBadge status={i.accreditation_status} />
+                      </td>
+                      {walletCell(i)}
+                      <td>
+                        {i.accreditation_status === "SUSPENDED" ? (
+                          <button
+                            className="btn btn-ghost btn-sm"
+                            disabled={busy === i.code}
+                            onClick={() => decide(i, "approve")}
+                          >
+                            {busy === i.code && <Spinner />}
+                            Reinstate
+                          </button>
+                        ) : (
+                          <span className="muted">Waiting for a new application</span>
+                        )}
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          </section>
+        )}
       </div>
     </>
   );
@@ -829,14 +1183,28 @@ function IssueDegreePage({
   }
 
   if (currentInst && currentInst.accreditation_status !== "ACCREDITED") {
+    const st = currentInst.accreditation_status;
     return (
       <>
-        <BackLink to="/register">Back to institution onboarding</BackLink>
+        <BackLink to="/register">Back to my institution</BackLink>
         <section className="panel">
-          <h2 className="panel-title">Access denied for {uniCode}</h2>
+          <h2 className="panel-title">
+            {st === "PENDING"
+              ? `${uniCode} is waiting for HEC approval`
+              : st === "SUSPENDED"
+                ? `${uniCode} is suspended`
+                : st === "REJECTED"
+                  ? `HEC rejected ${uniCode}`
+                  : `${uniCode} is not accredited yet`}
+          </h2>
           <p className="panel-text">
-            {currentInst.name} ({uniCode}) is marked as unaccredited in the
-            simulated HEC and NCNM registry, so it cannot issue credentials.
+            {st === "PENDING"
+              ? "The application is with HEC. The portal opens after approval."
+              : st === "SUSPENDED"
+                ? "HEC has suspended this institution, so it cannot issue new credentials."
+                : st === "REJECTED"
+                  ? "The last application was rejected. The institution can apply again."
+                  : "Apply for accreditation before using this portal."}
           </p>
           <Link to="/register" className="btn">
             Return to onboarding
@@ -849,7 +1217,7 @@ function IssueDegreePage({
   if (!currentInst) {
     return (
       <>
-        <BackLink to="/register">Back to institution onboarding</BackLink>
+        <BackLink to="/register">Back to my institution</BackLink>
         <section className="panel">
           <h2 className="panel-title">
             {institutions.length === 0
@@ -869,7 +1237,7 @@ function IssueDegreePage({
   if (!boundWallet) {
     return (
       <>
-        <BackLink to="/register">Back to institution onboarding</BackLink>
+        <BackLink to="/register">Back to my institution</BackLink>
         <section className="panel">
           <h2 className="panel-title">No registrar wallet bound to {uniCode}</h2>
           <p className="panel-text">
@@ -886,7 +1254,7 @@ function IssueDegreePage({
   if (!walletAddress) {
     return (
       <>
-        <BackLink to="/register">Back to institution onboarding</BackLink>
+        <BackLink to="/register">Back to my institution</BackLink>
         <section className="panel">
           <h2 className="panel-title">Connect the {uniCode} wallet</h2>
           <p className="panel-text">
@@ -904,7 +1272,7 @@ function IssueDegreePage({
   if (!isOwner) {
     return (
       <>
-        <BackLink to="/register">Back to institution onboarding</BackLink>
+        <BackLink to="/register">Back to my institution</BackLink>
         <section className="panel">
           <h2 className="panel-title">Wrong account for {uniCode}</h2>
           <p className="panel-text">
@@ -941,7 +1309,7 @@ function IssueDegreePage({
   if (!token) {
     return (
       <>
-        <BackLink to="/register">Back to institution onboarding</BackLink>
+        <BackLink to="/register">Back to my institution</BackLink>
         <section className="panel">
           <h2 className="panel-title">Sign in as the {uniCode} registrar</h2>
           <p className="panel-text">
@@ -979,7 +1347,7 @@ function IssueDegreePage({
 
   return (
     <>
-      <BackLink to="/register">Back to institution onboarding</BackLink>
+      <BackLink to="/register">Back to my institution</BackLink>
 
       <PageHead title="Issue a credential">
         Issuing as {currentInst ? `${currentInst.name} (${uniCode})` : uniCode}.
@@ -1006,9 +1374,10 @@ function IssueDegreePage({
               </label>
 
               <label className="field">
-                <span className="field-label">Certificate ID</span>
+                <span className="field-label">Certificate number *</span>
                 <input
                   type="text"
+                  required
                   placeholder="e.g. 220001624"
                   value={issueForm.credentialId}
                   onChange={(e) =>
@@ -1016,7 +1385,8 @@ function IssueDegreePage({
                   }
                 />
                 <span className="field-hint">
-                  Leave blank to auto-generate a reference code.
+                  The unique number printed on the certificate. It is the
+                  reference code and keeps each hash unique.
                 </span>
               </label>
 
@@ -1313,11 +1683,11 @@ function VerifyPage({ institutions }: { institutions: Institution[] }) {
           <form onSubmit={handleVerifyCredential}>
             <div className="field-grid">
               <label className="field">
-                <span className="field-label">Reference code *</span>
+                <span className="field-label">Certificate number *</span>
                 <input
                   type="text"
                   required
-                  placeholder="e.g. RW-UNIVA-2026-... or 220001624"
+                  placeholder="e.g. 220001624"
                   value={verifyForm.referenceCode}
                   onChange={(e) =>
                     setVerifyForm({
@@ -1567,19 +1937,145 @@ function VerifyPage({ institutions }: { institutions: Institution[] }) {
   );
 }
 
-/* ---------- Logs ---------- */
+/* ---------- Shared gates ---------- */
 
-function LogsPage() {
+function HecGate({
+  walletAddress,
+  hecAddress,
+  connectWallet,
+}: {
+  walletAddress: string;
+  hecAddress: string | null;
+  connectWallet: () => Promise<void>;
+}) {
+  if (!walletAddress) {
+    return (
+      <section className="panel">
+        <h2 className="panel-title">Connect the HEC wallet</h2>
+        <p className="panel-text">
+          This area is limited to the HEC wallet recorded in the contract.
+        </p>
+        <button type="button" className="btn btn-blue" onClick={connectWallet}>
+          Connect MetaMask
+        </button>
+      </section>
+    );
+  }
+  return (
+    <section className="panel">
+      <h2 className="panel-title">HEC wallet required</h2>
+      <p className="panel-text">
+        Only the HEC wallet can use this area. Switch MetaMask to that account
+        to continue.
+      </p>
+      <dl className="facts">
+        <div className="fact">
+          <dt>Connected wallet</dt>
+          <dd className="mono">{walletAddress}</dd>
+        </div>
+        <div className="fact">
+          <dt>HEC wallet</dt>
+          <dd className="mono">{hecAddress ?? "Could not be loaded"}</dd>
+        </div>
+      </dl>
+      <div className="form-actions">
+        <button type="button" className="btn btn-blue" onClick={connectWallet}>
+          Switch account
+        </button>
+      </div>
+    </section>
+  );
+}
+
+function SignInPanel({
+  title,
+  signIn,
+}: {
+  title: string;
+  signIn: () => Promise<string>;
+}) {
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  return (
+    <section className="panel">
+      <h2 className="panel-title">{title}</h2>
+      <p className="panel-text">
+        Sign a short message in MetaMask to prove you control this wallet. It
+        costs no gas and sends no transaction.
+      </p>
+      <button
+        type="button"
+        className="btn btn-blue"
+        disabled={busy}
+        onClick={async () => {
+          setError(null);
+          setBusy(true);
+          try {
+            await signIn();
+          } catch (err: any) {
+            setError(err.shortMessage ?? err.message);
+          } finally {
+            setBusy(false);
+          }
+        }}
+      >
+        {busy && <Spinner />}
+        {busy ? "Waiting for MetaMask" : "Sign in with MetaMask"}
+      </button>
+      {error && (
+        <Notice tone="bad" title="Sign-in failed.">
+          {error}
+        </Notice>
+      )}
+    </section>
+  );
+}
+
+/* ---------- Logs (HEC only) ---------- */
+
+function LogsPage({
+  walletAddress,
+  hecAddress,
+  connectWallet,
+  token,
+  signIn,
+  authFetch,
+}: {
+  walletAddress: string;
+  hecAddress: string | null;
+  connectWallet: () => Promise<void>;
+  token: string | null;
+  signIn: () => Promise<string>;
+  authFetch: AuthFetch;
+}) {
   const [logs, setLogs] = useState<VerificationLogRow[]>([]);
+  const isHec = sameAddress(walletAddress, hecAddress);
 
   useEffect(() => {
-    fetch(`${API_BASE}/logs`)
+    if (!isHec || !token) {
+      setLogs([]);
+      return;
+    }
+    authFetch(`${API_BASE}/logs`)
       .then((r) => r.json())
       .then((data) => {
         if (Array.isArray(data)) setLogs(data);
       })
       .catch(console.error);
-  }, []);
+  }, [isHec, token]);
+
+  if (!isHec) {
+    return (
+      <HecGate
+        walletAddress={walletAddress}
+        hecAddress={hecAddress}
+        connectWallet={connectWallet}
+      />
+    );
+  }
+  if (!token) {
+    return <SignInPanel title="Sign in as HEC" signIn={signIn} />;
+  }
 
   const avgMs =
     logs.length > 0
@@ -1668,6 +2164,7 @@ export default function App() {
     DEFAULT_CONTRACT_ADDRESS,
   );
   const [institutions, setInstitutions] = useState<Institution[]>([]);
+  const [hecAddress, setHecAddress] = useState<string | null>(null);
   const [backendError, setBackendError] = useState<string | null>(null);
   const [theme, toggleTheme] = useTheme();
   const [auth, setAuth] = useState<{ token: string; wallet: string } | null>(
@@ -1685,6 +2182,9 @@ export default function App() {
     auth && walletAddress && auth.wallet === walletAddress.toLowerCase()
       ? auth.token
       : null;
+  // authFetch reads this ref, so a sign-in made earlier in the same click is not repeated
+  const tokenRef = useRef<string | null>(null);
+  tokenRef.current = token;
 
   useEffect(() => {
     try {
@@ -1737,6 +2237,7 @@ export default function App() {
       if (hRes.ok) {
         const hData = await hRes.json();
         if (hData.contractAddress) setContractAddress(hData.contractAddress);
+        if (hData.hecAddress) setHecAddress(hData.hecAddress);
       }
       const iData = await iRes.json();
       if (!iRes.ok) {
@@ -1810,13 +2311,14 @@ export default function App() {
     const lData = await lRes.json();
     if (!lRes.ok) throw new Error(lData.error ?? "Sign-in failed");
 
+    tokenRef.current = lData.token;
     setAuth({ token: lData.token, wallet: lData.walletAddress });
     return lData.token;
   }
 
   // fetch() with the wallet token attached; signs in first if there is none
   async function authFetch(url: string, init: RequestInit = {}) {
-    const t = token ?? (await signIn());
+    const t = tokenRef.current ?? (await signIn());
     const res = await fetch(url, {
       ...init,
       headers: {
@@ -1833,23 +2335,41 @@ export default function App() {
       <div className="app-shell">
         <Header
           walletAddress={walletAddress}
+          institutions={institutions}
           connectWallet={connectWallet}
           theme={theme}
           onToggleTheme={toggleTheme}
         />
         <main className="page">
           <Routes>
-            <Route path="/" element={<Navigate to="/register" replace />} />
+            <Route path="/" element={<Landing />} />
             <Route
               path="/register"
               element={
                 <RegisterPage
                   institutions={institutions}
                   walletAddress={walletAddress}
+                  hecAddress={hecAddress}
                   connectWallet={connectWallet}
                   refreshInstitutions={fetchHealthAndInstitutions}
                   backendError={backendError}
                   authFetch={authFetch}
+                />
+              }
+            />
+            <Route
+              path="/admin"
+              element={
+                <AdminPage
+                  institutions={institutions}
+                  walletAddress={walletAddress}
+                  hecAddress={hecAddress}
+                  contractAddress={contractAddress}
+                  connectWallet={connectWallet}
+                  refreshInstitutions={fetchHealthAndInstitutions}
+                  authFetch={authFetch}
+                  token={token}
+                  signIn={signIn}
                 />
               }
             />
@@ -1871,7 +2391,19 @@ export default function App() {
               path="/verify"
               element={<VerifyPage institutions={institutions} />}
             />
-            <Route path="/logs" element={<LogsPage />} />
+            <Route
+              path="/logs"
+              element={
+                <LogsPage
+                  walletAddress={walletAddress}
+                  hecAddress={hecAddress}
+                  connectWallet={connectWallet}
+                  token={token}
+                  signIn={signIn}
+                  authFetch={authFetch}
+                />
+              }
+            />
           </Routes>
         </main>
         <Footer contractAddress={contractAddress} />

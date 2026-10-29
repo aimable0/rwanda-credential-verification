@@ -3,8 +3,11 @@ pragma solidity ^0.8.20;
 
 /**
  * @title CredentialRegistry
- * @notice Single-issuer hash-anchoring and mutable revocation registry for Rwandan credentials.
- * @dev Implements zero-storage verification: no personal data or documents are stored on-chain.
+ * @notice Hash-anchoring and revocation registry for Rwandan credentials, with issuer
+ *         accreditation controlled by a single HEC (Higher Education Council) wallet.
+ * @dev Zero-storage verification: no personal data or documents are stored on-chain.
+ *      Only issuers accredited by HEC can anchor credentials. Each credential keeps its
+ *      original issuer, and only that issuer can revoke it.
  */
 contract CredentialRegistry {
     struct AnchoredCredential {
@@ -14,17 +17,25 @@ contract CredentialRegistry {
         bool exists;
     }
 
+    /// @notice The HEC wallet. The only address that can accredit or suspend issuers.
+    address public immutable hec;
+
+    /// @notice Issuers currently allowed to anchor new credentials.
+    mapping(address => bool) public accreditedIssuers;
+
     // Maps human-usable reference_code -> AnchoredCredential record
     mapping(string => AnchoredCredential) private credentialsByRef;
 
     // Maps credential_hash -> issuer address (enforces single-issuer revocation rule)
     mapping(bytes32 => address) public hashIssuer;
 
-    // On-chain RevocationStatus mapping (Figure 3.1 & Figure 3.3):
     // credential_hash -> revocation_timestamp (0 if active, >0 if revoked)
     mapping(bytes32 => uint256) public revocationTimestamps;
 
-    // Auditability events (Section 3.3.2 Non-functional requirements)
+    // Auditability events
+    event IssuerAccredited(address indexed issuer, uint256 timestamp);
+    event IssuerSuspended(address indexed issuer, uint256 timestamp);
+
     event CredentialIssued(
         string indexed referenceCodeIdx,
         string referenceCode,
@@ -39,6 +50,9 @@ contract CredentialRegistry {
         uint256 revocationTimestamp
     );
 
+    error NotHec();
+    error ZeroAddress();
+    error NotAccreditedIssuer();
     error ReferenceCodeAlreadyUsed();
     error HashAlreadyAnchored();
     error InvalidCredentialHash();
@@ -47,15 +61,47 @@ contract CredentialRegistry {
     error UnauthorizedIssuer();
     error CredentialAlreadyRevoked();
 
+    modifier onlyHec() {
+        if (msg.sender != hec) revert NotHec();
+        _;
+    }
+
+    /// @param _hec The wallet that represents HEC. It does not have to be the deployer.
+    constructor(address _hec) {
+        if (_hec == address(0)) revert ZeroAddress();
+        hec = _hec;
+    }
+
     /**
-     * @notice Anchors a new credential hash and reference code on-chain, signed by the issuing institution.
-     * @param _credentialHash SHA-256 hash of the salted structured credential fields
-     * @param _referenceCode Short human-usable reference code (e.g., "RW-UNIVA-2026-8F3A")
+     * @notice HEC approves an institution wallet to anchor credentials.
+     * @dev Safe to call again for an already accredited or a suspended issuer.
+     */
+    function accreditIssuer(address _issuer) external onlyHec {
+        if (_issuer == address(0)) revert ZeroAddress();
+        accreditedIssuers[_issuer] = true;
+        emit IssuerAccredited(_issuer, block.timestamp);
+    }
+
+    /**
+     * @notice HEC stops an issuer from anchoring new credentials.
+     * @dev Credentials the issuer already anchored stay valid, and the issuer can still
+     *      revoke its own credentials.
+     */
+    function suspendIssuer(address _issuer) external onlyHec {
+        accreditedIssuers[_issuer] = false;
+        emit IssuerSuspended(_issuer, block.timestamp);
+    }
+
+    /**
+     * @notice Anchors a new credential hash and reference code, signed by an accredited issuer.
+     * @param _credentialHash SHA-256 hash of the structured credential fields
+     * @param _referenceCode The unique certificate number printed on the credential
      */
     function issueCredential(
         bytes32 _credentialHash,
         string calldata _referenceCode
     ) external {
+        if (!accreditedIssuers[msg.sender]) revert NotAccreditedIssuer();
         if (_credentialHash == bytes32(0)) revert InvalidCredentialHash();
         if (bytes(_referenceCode).length == 0) revert EmptyReferenceCode();
         if (credentialsByRef[_referenceCode].exists)
@@ -85,7 +131,7 @@ contract CredentialRegistry {
      * @notice Revokes an existing credential. Writable ONLY by the original issuing institution.
      * @param _credentialHash The bytes32 hash of the credential to revoke
      */
-    function revoke(bytes32 _credentialHash) external {
+    function revokeCredential(bytes32 _credentialHash) external {
         address originalIssuer = hashIssuer[_credentialHash];
         if (originalIssuer == address(0)) revert CredentialNotFound();
         if (originalIssuer != msg.sender) revert UnauthorizedIssuer();
@@ -98,7 +144,7 @@ contract CredentialRegistry {
     }
 
     /**
-     * @notice Checks revocation status directly by credential_hash (Figure 3.1 RevocationStatus.check_status)
+     * @notice Checks revocation status directly by credential_hash
      * @param _credentialHash The bytes32 hash of the credential
      * @return revocationTimestamp 0 if active/not revoked, >0 timestamp if revoked
      */
@@ -109,7 +155,7 @@ contract CredentialRegistry {
     }
 
     /**
-     * @notice Retrieves the anchored record and revocation status for a reference code (Figure 3.5b Steps 5-8)
+     * @notice Retrieves the anchored record and revocation status for a reference code
      * @param _referenceCode The reference code printed on the credential
      */
     function getRecordByReferenceCode(

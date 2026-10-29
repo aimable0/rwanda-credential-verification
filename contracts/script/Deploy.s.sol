@@ -6,8 +6,11 @@ import "../src/CredentialRegistry.sol";
 
 contract DeployCredentialRegistry is Script {
     function run() external returns (CredentialRegistry) {
+        // The wallet that acts as HEC. Set HEC_ADDRESS in contracts/.env.
+        address hec = vm.envAddress("HEC_ADDRESS");
+
         vm.startBroadcast();
-        CredentialRegistry registry = new CredentialRegistry();
+        CredentialRegistry registry = new CredentialRegistry(hec);
         vm.stopBroadcast();
         return registry;
     }
