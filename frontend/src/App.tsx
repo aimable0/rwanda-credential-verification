@@ -58,6 +58,7 @@ interface CredentialRow {
   credential_type: string;
   institution_code: string;
   institution_name: string;
+  revoked_at?: number | null; // unix seconds when revoked on-chain, null if active
 }
 
 interface VerificationLogRow {
@@ -1146,6 +1147,9 @@ function IssueDegreePage({
     referenceCode: string,
   ) {
     setRevokeMsg(null);
+    if (credentials.find((c) => c.credential_hash === credentialHash)?.revoked_at) {
+      return; // already revoked, the contract would reject a second revocation
+    }
     if (!isOwner) {
       setRevokeMsg(
         "Revocation error: the connected wallet is not the registrar wallet for this institution.",
@@ -1171,6 +1175,14 @@ function IssueDegreePage({
 
       const tx = await contract.revokeCredential(credentialHash);
       const receipt = await tx.wait();
+      // Show it as revoked straight away; the next load reads the real time from the chain
+      setCredentials((prev) =>
+        prev.map((c) =>
+          c.credential_hash === credentialHash
+            ? { ...c, revoked_at: Math.floor(Date.now() / 1000) }
+            : c,
+        ),
+      );
       setRevokeMsg(
         `Revoked ${referenceCode} on-chain! Tx: ${receipt.hash} (Gas used: ${receipt.gasUsed.toString()})`,
       );
@@ -1570,6 +1582,7 @@ function IssueDegreePage({
                   <th>Anchored hash</th>
                   <th>Holder reference</th>
                   <th>Award date</th>
+                  <th>Status</th>
                   <th>Action</th>
                 </tr>
               </thead>
@@ -1586,27 +1599,41 @@ function IssueDegreePage({
                     <td className="mono">{c.holder_reference}</td>
                     <td>{String(c.issuance_date).slice(0, 10)}</td>
                     <td>
-                      <button
-                        className="btn btn-danger btn-sm"
-                        disabled={revokingHash === c.credential_hash}
-                        onClick={() =>
-                          handleRevokeCredential(
-                            c.credential_hash,
-                            c.reference_code,
-                          )
-                        }
+                      <span
+                        className={`badge ${c.revoked_at ? "tone-warn" : "tone-ok"}`}
                       >
-                        {revokingHash === c.credential_hash && <Spinner />}
-                        {revokingHash === c.credential_hash
-                          ? "Revoking"
-                          : "Revoke on-chain"}
-                      </button>
+                        {c.revoked_at ? "Revoked" : "Active"}
+                      </span>
+                    </td>
+                    <td>
+                      {c.revoked_at ? (
+                        <span className="muted">
+                          Revoked on{" "}
+                          {new Date(c.revoked_at * 1000).toLocaleDateString()}
+                        </span>
+                      ) : (
+                        <button
+                          className="btn btn-danger btn-sm"
+                          disabled={revokingHash === c.credential_hash}
+                          onClick={() =>
+                            handleRevokeCredential(
+                              c.credential_hash,
+                              c.reference_code,
+                            )
+                          }
+                        >
+                          {revokingHash === c.credential_hash && <Spinner />}
+                          {revokingHash === c.credential_hash
+                            ? "Revoking"
+                            : "Revoke on-chain"}
+                        </button>
+                      )}
                     </td>
                   </tr>
                 ))}
                 {credentials.length === 0 && (
                   <tr>
-                    <td colSpan={5} className="cell-empty">
+                    <td colSpan={6} className="cell-empty">
                       No credentials issued by {uniCode} yet.
                     </td>
                   </tr>
@@ -1665,6 +1692,9 @@ function VerifyPage({ institutions }: { institutions: Institution[] }) {
   const recomputed = verifyResponse?.details?.recomputedHash;
   const anchored = verifyResponse?.details?.anchoredHash;
   const hashesMatch = !!recomputed && !!anchored && recomputed === anchored;
+  // On a mismatch the backend returns no record details, so none are shown
+  const hasDetails =
+    !!verifyResponse && verifyResponse.result !== "MISMATCH_OR_NOT_FOUND";
 
   return (
     <>
@@ -1834,8 +1864,8 @@ function VerifyPage({ institutions }: { institutions: Institution[] }) {
         <section className="panel sticky" aria-live="polite">
           <h2 className="panel-title">Verification result</h2>
           <p className="panel-text">
-            The salted SHA-256 hash is recomputed and compared with the record
-            on the Sepolia contract.
+            The SHA-256 hash of the details you entered is recomputed and
+            compared with the record on the Sepolia contract.
           </p>
 
           {verifyLoading && (
@@ -1891,42 +1921,65 @@ function VerifyPage({ institutions }: { institutions: Institution[] }) {
                     {(verifyResponse.responseTimeMs / 1000).toFixed(2)} s)
                   </dd>
                 </div>
-                <div className="fact">
-                  <dt>Recomputed hash</dt>
-                  <dd>
-                    <span className="hash">{recomputed ?? "N/A"}</span>
-                  </dd>
-                </div>
-                <div className="fact">
-                  <dt>On-chain hash</dt>
-                  <dd>
-                    <span className="hash">{anchored ?? "Not found"}</span>
-                    {recomputed && anchored && (
-                      <span
-                        className={`match-line ${hashesMatch ? "tone-ok" : "tone-bad"}`}
-                      >
-                        {hashesMatch ? "Hashes match" : "Hashes differ"}
-                      </span>
+                {hasDetails && (
+                  <>
+                    {verifyResponse.details?.issuerInstitution?.name && (
+                      <div className="fact">
+                        <dt>Issued by</dt>
+                        <dd>
+                          {verifyResponse.details.issuerInstitution.name} (
+                          {verifyResponse.details.issuerInstitution.code})
+                        </dd>
+                      </div>
                     )}
-                  </dd>
-                </div>
-                {verifyResponse.details?.issuerAddress && (
-                  <div className="fact">
-                    <dt>Issuer wallet</dt>
-                    <dd className="mono">
-                      {verifyResponse.details.issuerAddress}
-                    </dd>
-                  </div>
-                )}
-                {verifyResponse.details?.revocationTimestamp > 0 && (
-                  <div className="fact">
-                    <dt>Revoked at</dt>
-                    <dd>
-                      {new Date(
-                        verifyResponse.details.revocationTimestamp * 1000,
-                      ).toUTCString()}
-                    </dd>
-                  </div>
+                    {verifyResponse.details?.issuedAtTimestamp > 0 && (
+                      <div className="fact">
+                        <dt>Issued on</dt>
+                        <dd>
+                          {new Date(
+                            verifyResponse.details.issuedAtTimestamp * 1000,
+                          ).toLocaleDateString()}
+                        </dd>
+                      </div>
+                    )}
+                    <div className="fact">
+                      <dt>Recomputed hash</dt>
+                      <dd>
+                        <span className="hash">{recomputed ?? "N/A"}</span>
+                      </dd>
+                    </div>
+                    <div className="fact">
+                      <dt>On-chain hash</dt>
+                      <dd>
+                        <span className="hash">{anchored ?? "Not found"}</span>
+                        {recomputed && anchored && (
+                          <span
+                            className={`match-line ${hashesMatch ? "tone-ok" : "tone-bad"}`}
+                          >
+                            {hashesMatch ? "Hashes match" : "Hashes differ"}
+                          </span>
+                        )}
+                      </dd>
+                    </div>
+                    {verifyResponse.details?.issuerAddress && (
+                      <div className="fact">
+                        <dt>Issuer wallet</dt>
+                        <dd className="mono">
+                          {verifyResponse.details.issuerAddress}
+                        </dd>
+                      </div>
+                    )}
+                    {verifyResponse.details?.revocationTimestamp > 0 && (
+                      <div className="fact">
+                        <dt>Revoked at</dt>
+                        <dd>
+                          {new Date(
+                            verifyResponse.details.revocationTimestamp * 1000,
+                          ).toUTCString()}
+                        </dd>
+                      </div>
+                    )}
+                  </>
                 )}
               </dl>
             </>

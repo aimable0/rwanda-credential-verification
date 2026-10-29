@@ -63,3 +63,10 @@ export async function getHecAddress(): Promise<string> {
 export async function isIssuerAccredited(wallet: string): Promise<boolean> {
   return (await registryContract.accreditedIssuers(wallet)) as boolean;
 }
+
+/** Unix seconds when the credential was revoked on-chain, or 0 if it is still active. */
+export async function getRevocationTimestamp(
+  credentialHash: string,
+): Promise<number> {
+  return Number(await registryContract.checkStatus(credentialHash));
+}

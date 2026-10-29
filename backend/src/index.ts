@@ -12,6 +12,7 @@ import {
 import {
   getHecAddress,
   getOnChainCredential,
+  getRevocationTimestamp,
   isIssuerAccredited,
 } from "./services/blockchain";
 import {
@@ -405,7 +406,19 @@ app.get(
          ORDER BY c.credential_id DESC`,
         [institutionCode],
       );
-      res.json(result.rows);
+      // Revocation lives on-chain only, so read it for each credential.
+      // revoked_at is null for active credentials and undefined if the chain could not be read.
+      const rows = await Promise.all(
+        result.rows.map(async (r: any) => {
+          try {
+            const ts = await getRevocationTimestamp(r.credential_hash);
+            return { ...r, revoked_at: ts > 0 ? ts : null };
+          } catch {
+            return r;
+          }
+        }),
+      );
+      res.json(rows);
     } catch (err: any) {
       res.status(500).json({ error: err.message });
     }
@@ -482,7 +495,7 @@ app.post("/api/credentials/verify", async (req: Request, res: Response) => {
       // The on-chain issuer must be the wallet bound to the institution that owns this record.
       // This rejects records anchored by an outside wallet (for example a squatted reference code).
       const ownerRes = await query(
-        "SELECT wallet_address FROM institutions WHERE institution_id = $1",
+        "SELECT code, name, wallet_address FROM institutions WHERE institution_id = $1",
         [dbRecord.institution_id],
       );
       const boundWallet: string | null =
@@ -507,25 +520,29 @@ app.post("/api/credentials/verify", async (req: Request, res: Response) => {
         outcome = "MISMATCH_OR_NOT_FOUND";
       }
 
-      details = {
-        recomputedHash,
-        anchoredHash: onChain.exists ? onChain.credentialHash : null,
-        onChainExists: onChain.exists,
-        issuerAddress: onChain.exists ? onChain.issuer : null,
-        issuerMatchesInstitution,
-        issuedAtTimestamp: onChain.exists ? onChain.issuedAt : null,
-        revocationTimestamp: onChain.exists ? onChain.revocationTimestamp : 0,
-      };
+      // Record details are returned only when the entered fields match the anchored record.
+      // On a mismatch the caller learns the outcome and nothing else: no on-chain hash,
+      // no issuer wallet, and no hint about which field was wrong.
+      details =
+        outcome === "MISMATCH_OR_NOT_FOUND"
+          ? {}
+          : {
+              recomputedHash,
+              anchoredHash: onChain.credentialHash,
+              issuerAddress: onChain.issuer,
+              issuerInstitution: {
+                code: ownerRes.rows[0]?.code,
+                name: ownerRes.rows[0]?.name,
+              },
+              issuedAtTimestamp: onChain.issuedAt,
+              revocationTimestamp: onChain.revocationTimestamp,
+            };
     } else {
-      // Reference code not found in the off-chain table -> still check chain for completeness
-      const onChain = await getOnChainCredential(lookupCode);
+      // Reference code not found in the off-chain table. The chain is still queried so
+      // response times stay comparable across scenarios, but nothing from it is returned.
+      await getOnChainCredential(lookupCode);
       outcome = "MISMATCH_OR_NOT_FOUND";
-      details = {
-        recomputedHash: null,
-        anchoredHash: onChain.exists ? onChain.credentialHash : null,
-        onChainExists: onChain.exists,
-        reason: "Reference code not found in registry.",
-      };
+      details = {};
     }
 
     const responseTimeMs = Date.now() - startTime;
