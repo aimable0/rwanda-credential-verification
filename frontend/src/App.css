@@ -49,12 +49,11 @@
   --bad: #9b2020;
   --bad-line: #f0a3a3;
 
-  --font-body:
-    "IBM Plex Sans", system-ui, -apple-system, "Segoe UI", Roboto,
+  --font-body: "IBM Plex Sans", system-ui, -apple-system, "Segoe UI", Roboto,
     "Helvetica Neue", Arial, sans-serif;
   --font-display: "Newsreader", Georgia, "Times New Roman", serif;
-  --font-mono:
-    "IBM Plex Mono", ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  --font-mono: "IBM Plex Mono", ui-monospace, SFMono-Regular, Menlo, Consolas,
+    monospace;
 }
 
 /* ---------- Dark theme ---------- */
@@ -286,9 +285,7 @@ a {
 .wallet-pill {
   color: var(--ink);
   cursor: pointer;
-  transition:
-    background 0.15s,
-    border-color 0.15s;
+  transition: background 0.15s, border-color 0.15s;
 }
 
 .wallet-pill:hover {
@@ -484,9 +481,7 @@ a {
   color: var(--ink);
   font-size: 0.95rem;
   line-height: 1.4;
-  transition:
-    border-color 0.15s,
-    box-shadow 0.15s;
+  transition: border-color 0.15s, box-shadow 0.15s;
 }
 
 .field select {
@@ -562,9 +557,7 @@ a {
   line-height: 1.2;
   text-decoration: none;
   white-space: nowrap;
-  transition:
-    background 0.15s,
-    border-color 0.15s;
+  transition: background 0.15s, border-color 0.15s;
 }
 
 .btn:hover:not(:disabled) {
@@ -950,11 +943,38 @@ tbody tr:last-child td {
   font-size: 0.84rem;
 }
 
-.footer-inner a {
+.footer-contract {
   color: var(--ink-2);
   font-family: var(--font-mono);
   font-size: 0.8rem;
   overflow-wrap: anywhere;
+}
+
+.footer-links {
+  display: flex;
+  gap: 18px;
+}
+
+.footer-links a {
+  color: var(--ink-2);
+  font-weight: 500;
+  text-decoration: none;
+}
+
+.footer-links a:hover {
+  color: var(--heading);
+  text-decoration: underline;
+}
+
+.footer-credit {
+  margin-left: auto;
+}
+
+@media (max-width: 760px) {
+  .footer-credit {
+    margin-left: 0;
+    width: 100%;
+  }
 }
 
 /* ---------- Motion preference ---------- */
@@ -1101,4 +1121,87 @@ tbody tr:last-child td {
   .brand {
     flex: none;
   }
+}
+
+/* ---------- Steps, two columns and 404 ---------- */
+
+.steps {
+  display: grid;
+  gap: 16px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  counter-reset: step;
+}
+
+.steps li {
+  position: relative;
+  padding-left: 42px;
+  counter-increment: step;
+}
+
+.steps li::before {
+  content: counter(step);
+  position: absolute;
+  top: 0;
+  left: 0;
+  display: grid;
+  place-items: center;
+  width: 28px;
+  height: 28px;
+  background: var(--sunken);
+  border: 1px solid var(--line-strong);
+  border-radius: 50%;
+  color: var(--heading);
+  font-size: 0.85rem;
+  font-weight: 600;
+}
+
+.steps strong {
+  display: block;
+  color: var(--ink);
+}
+
+.steps span {
+  color: var(--ink-2);
+  font-size: 0.92rem;
+}
+
+.two-col {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 24px;
+  align-items: start;
+}
+
+@media (max-width: 860px) {
+  .two-col {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}
+
+.notfound {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  max-width: 560px;
+  margin: 40px auto 0;
+  padding: 48px 28px;
+  text-align: center;
+}
+
+.notfound p {
+  text-align: center;
+}
+
+.notfound-code {
+  color: var(--line-strong);
+  font-family: var(--font-display);
+  font-size: 4.5rem;
+  font-weight: 600;
+  line-height: 1;
+}
+
+.notfound .form-actions {
+  justify-content: center;
 }

@@ -12,7 +12,9 @@ import {
 import { ethers } from "ethers";
 import "./App.css";
 
-const API_BASE = "http://localhost:4000/api";
+// Local dev talks to the backend directly. A production build sets VITE_API_BASE=/api.
+const API_BASE: string =
+  import.meta.env.VITE_API_BASE ?? "http://localhost:4000/api";
 const SEPOLIA_CHAIN_ID_HEX = "0xaa36a7";
 const DEFAULT_CONTRACT_ADDRESS = "0xAaf295EB2b31AC3eFeB0961e0f7E403A462ea590";
 
@@ -307,7 +309,7 @@ function ThemeToggle({
 
 /* ---------- Top bar and footer ---------- */
 
-type Area = "landing" | "verifier" | "institution" | "admin";
+type Area = "landing" | "verifier" | "institution" | "admin" | "other";
 
 // Each role gets its own area, header and navigation
 function areaFor(pathname: string): Area {
@@ -315,7 +317,9 @@ function areaFor(pathname: string): Area {
   if (pathname.startsWith("/verify")) return "verifier";
   if (pathname.startsWith("/admin") || pathname.startsWith("/logs"))
     return "admin";
-  return "institution"; // /register and /:university/issue_degree
+  if (pathname === "/register" || pathname.endsWith("/issue_degree"))
+    return "institution";
+  return "other"; // /about, /guide and unknown pages
 }
 
 function Header({
@@ -446,24 +450,311 @@ function Landing() {
           </Link>
         </section>
       </div>
+
+      <p className="muted" style={{ marginTop: 24 }}>
+        New here? Read the <Link to="/guide">user guide</Link> or see{" "}
+        <Link to="/about">how it works</Link>.
+      </p>
     </>
   );
 }
+
+/* ---------- Footer ---------- */
 
 function Footer({ contractAddress }: { contractAddress: string }) {
   return (
     <footer className="footer">
       <div className="footer-inner">
-        <span>Registry contract on Sepolia</span>
-        <a
-          href={`https://sepolia.etherscan.io/address/${contractAddress}`}
-          target="_blank"
-          rel="noreferrer"
-        >
-          {contractAddress}
-        </a>
+        <nav className="footer-links" aria-label="More">
+          <Link to="/about">About</Link>
+          <Link to="/guide">User guide</Link>
+        </nav>
+        <span>
+          Registry contract on Sepolia{" "}
+          <a
+            className="footer-contract"
+            href={`https://sepolia.etherscan.io/address/${contractAddress}`}
+            target="_blank"
+            rel="noreferrer"
+          >
+            {contractAddress}
+          </a>
+        </span>
+        <span className="footer-credit">
+          Made by Aimable Nkurikiyimana © 2026
+        </span>
       </div>
     </footer>
+  );
+}
+
+/* ---------- About, guide and 404 ---------- */
+
+function AboutPage() {
+  return (
+    <>
+      <PageHead title="About the platform">
+        The Rwanda Credential Verification System lets anyone check that a
+        degree or professional licence is real, unchanged and still valid,
+        without contacting the institution that issued it.
+      </PageHead>
+
+      <div className="stack">
+        <section className="panel">
+          <h2 className="panel-title">How it works</h2>
+          <p className="panel-text">
+            Each credential is turned into a fingerprint, and only the
+            fingerprint is recorded on the blockchain.
+          </p>
+          <ol className="steps">
+            <li>
+              <strong>An accredited institution enters the certificate.</strong>
+              <span>
+                It enters seven fields: institution, certificate number, holder
+                name, degree or licence title, programme, classification and
+                award date.
+              </span>
+            </li>
+            <li>
+              <strong>The system computes a SHA-256 hash.</strong>
+              <span>
+                The unique certificate number is one of the hashed fields. It
+                plays the part a random salt would, so no two credentials hash
+                from the same input.
+              </span>
+            </li>
+            <li>
+              <strong>The hash is anchored on Ethereum Sepolia.</strong>
+              <span>
+                The institution signs a transaction with its MetaMask wallet.
+                The contract stores the hash, the certificate number, the
+                issuing wallet and the time.
+              </span>
+            </li>
+            <li>
+              <strong>Anyone can verify it.</strong>
+              <span>
+                The verifier re-enters the printed fields. The system hashes
+                them again, compares the result with the record on the
+                contract, and checks whether the credential was revoked.
+              </span>
+            </li>
+          </ol>
+        </section>
+
+        <div className="role-grid">
+          <section className="role-card">
+            <h2 className="panel-title">Zero-storage privacy</h2>
+            <p className="panel-text">
+              No names, degree titles or dates are written to the blockchain,
+              only a hash and the certificate number. The database keeps no
+              personal documents either.
+            </p>
+          </section>
+          <section className="role-card">
+            <h2 className="panel-title">Tamper-evident proof</h2>
+            <p className="panel-text">
+              Changing any single field, even one letter, produces a different
+              hash. An altered certificate fails verification.
+            </p>
+          </section>
+          <section className="role-card">
+            <h2 className="panel-title">Verified issuers</h2>
+            <p className="panel-text">
+              The contract accepts records only from wallets that HEC has
+              accredited, and the verifier sees which institution issued the
+              credential.
+            </p>
+          </section>
+        </div>
+
+        <section className="panel">
+          <h2 className="panel-title">Gated onboarding</h2>
+          <p className="panel-text">
+            Institutions cannot join on their own. Accreditation is controlled
+            by HEC, with licensing bodies such as NCNM handled through the same
+            registry.
+          </p>
+          <ol className="steps">
+            <li>
+              <strong>The institution applies</strong>
+              <span>
+                It connects its registrar wallet and applies. The request waits
+                as pending.
+              </span>
+            </li>
+            <li>
+              <strong>HEC reviews the request</strong>
+              <span>
+                The HEC admin wallet approves or rejects it. Approval is a
+                transaction that adds the institution's wallet to the
+                accredited issuer list on the contract.
+              </span>
+            </li>
+            <li>
+              <strong>The institution can issue</strong>
+              <span>
+                Wallets that are not on the list cannot anchor credentials,
+                even by calling the contract directly. HEC can suspend an
+                institution later, which stops new credentials but keeps the
+                existing ones valid.
+              </span>
+            </li>
+          </ol>
+        </section>
+
+        <section className="panel">
+          <h2 className="panel-title">Limits</h2>
+          <p className="panel-text" style={{ marginBottom: 0 }}>
+            This is a prototype that runs on the Sepolia test network. It
+            confirms that a certificate's details match a record anchored by an
+            accredited institution. It does not confirm who is presenting the
+            certificate. The certificate number is stored on the chain in
+            plain form, because it is the reference code.
+          </p>
+        </section>
+      </div>
+    </>
+  );
+}
+
+function GuidePage() {
+  return (
+    <>
+      <PageHead title="User guide">
+        Institutions follow the first list. Anyone checking a certificate
+        follows the second and needs no wallet or account.
+      </PageHead>
+
+      <div className="two-col">
+        <section className="panel">
+          <h2 className="panel-title">For institutions</h2>
+          <p className="panel-text">Issuing and revoking credentials.</p>
+          <ol className="steps">
+            <li>
+              <strong>Set up MetaMask</strong>
+              <span>
+                Install MetaMask and use the account that will act as your
+                registrar. You need a little Sepolia test ETH for gas.
+              </span>
+            </li>
+            <li>
+              <strong>Open the institution page</strong>
+              <span>
+                Choose Institution sign in and connect MetaMask. The app
+                switches you to the Sepolia network.
+              </span>
+            </li>
+            <li>
+              <strong>Apply for accreditation</strong>
+              <span>
+                Pick your institution and select Apply to HEC. Its status shows
+                as pending.
+              </span>
+            </li>
+            <li>
+              <strong>Wait for HEC to approve</strong>
+              <span>
+                When the status changes to accredited, Issue credentials
+                appears in the menu.
+              </span>
+            </li>
+            <li>
+              <strong>Sign in and issue</strong>
+              <span>
+                Sign in with MetaMask (a free signature). Enter the certificate
+                details exactly as printed, including the unique certificate
+                number, then select Hash and sign with MetaMask and confirm the
+                transaction.
+              </span>
+            </li>
+            <li>
+              <strong>Add the QR code to the certificate</strong>
+              <span>
+                The result shows a QR code and the reference code. Print them
+                on the document so verifiers can find the record.
+              </span>
+            </li>
+            <li>
+              <strong>Revoke if needed</strong>
+              <span>
+                In the list of issued credentials, select Revoke on-chain and
+                confirm in MetaMask. A revocation cannot be undone.
+              </span>
+            </li>
+          </ol>
+        </section>
+
+        <section className="panel">
+          <h2 className="panel-title">For verifiers</h2>
+          <p className="panel-text">Checking a certificate.</p>
+          <ol className="steps">
+            <li>
+              <strong>Scan the QR code</strong>
+              <span>
+                Use a phone camera. The verify page opens with the certificate
+                number and institution already filled in. Without a QR code,
+                open Verify a credential and type the certificate number.
+              </span>
+            </li>
+            <li>
+              <strong>Enter the printed details</strong>
+              <span>
+                Type the holder name, degree or licence title, programme (if
+                printed), classification and award date as they appear on the
+                certificate. Capital letters and extra spaces do not matter.
+                Spelling does.
+              </span>
+            </li>
+            <li>
+              <strong>Select Verify credential</strong>
+              <span>
+                Leave the evaluation scenario tag on Genuine. It is only used
+                for testing.
+              </span>
+            </li>
+            <li>
+              <strong>Read the result</strong>
+              <span>
+                <b>Genuine and active</b> means the details match a record from
+                an accredited institution and it has not been revoked.{" "}
+                <b>Genuine but revoked</b> means the record is real, but the
+                institution withdrew it. <b>Mismatch or not found</b> means no
+                record matches. Check every field against the certificate, and
+                if it still fails, treat the certificate as unverified and
+                contact the institution.
+              </span>
+            </li>
+          </ol>
+          <div className="form-actions">
+            <Link to="/verify" className="btn btn-blue">
+              Verify a credential
+            </Link>
+          </div>
+        </section>
+      </div>
+    </>
+  );
+}
+
+function NotFoundPage() {
+  const { pathname } = useLocation();
+  return (
+    <section className="panel notfound">
+      <span className="notfound-code">404</span>
+      <h1 className="panel-title">Page not found</h1>
+      <p className="panel-text" style={{ marginBottom: 0 }}>
+        There is no page at <span className="mono">{pathname}</span>.
+      </p>
+      <div className="form-actions">
+        <Link to="/" className="btn">
+          Go to the home page
+        </Link>
+        <Link to="/verify" className="btn btn-ghost">
+          Verify a credential
+        </Link>
+      </div>
+    </section>
   );
 }
 
@@ -2396,6 +2687,8 @@ export default function App() {
         <main className="page">
           <Routes>
             <Route path="/" element={<Landing />} />
+            <Route path="/about" element={<AboutPage />} />
+            <Route path="/guide" element={<GuidePage />} />
             <Route
               path="/register"
               element={
@@ -2457,6 +2750,7 @@ export default function App() {
                 />
               }
             />
+            <Route path="*" element={<NotFoundPage />} />
           </Routes>
         </main>
         <Footer contractAddress={contractAddress} />
