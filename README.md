@@ -4,7 +4,7 @@ A web platform where accredited institutions anchor degree and licence credentia
 
 - **Live website:** https://credentials.aimable.dev/
 - **Video walkthrough:** https://youtu.be/5a1mdBibjNQ
-- **Technical report:** [REPORT_URL]
+- **Technical report:** https://drive.google.com/file/d/1Fn4Ea6N6YLa_oCGLp4T3LxvGMI5Qsjih/view?usp=sharing
 - **Contract on Sepolia:** https://sepolia.etherscan.io/address/0x0870591E64752fD591003E2224BfF342f05F9F49
 
 
@@ -53,7 +53,7 @@ A certificate number is unique per institution. One institution cannot use the s
 ├── contracts/   Foundry project: CredentialRegistry.sol, tests, deploy script
 ├── backend/     Express API: routes, wallet auth, hashing, database schema
 ├── frontend/    React app
-└── README.md    
+└── README.md
 ```
 
 ## Prerequisites
