@@ -30,6 +30,14 @@ const app = express();
 app.use(cors());
 app.use(express.json());
 
+// A certificate number is unique per institution, not across institutions.
+// The reference code stored on-chain and in the database is "<INSTITUTION>-<NUMBER>",
+// so UNIVA-001 and UNIVB-001 are different records, while UNIVA cannot reuse UNIVA-001.
+const normalizeCertNumber = (s: string) =>
+  s.trim().replace(/\s+/g, " ").toUpperCase();
+const makeReferenceCode = (institutionCode: string, certNumber: string) =>
+  `${institutionCode.trim().toUpperCase()}-${certNumber}`;
+
 // 1. Health & Config Check
 app.get("/api/health", async (_req: Request, res: Response) => {
   let hecAddress: string | null = null;
@@ -77,7 +85,8 @@ app.post(
 
       if (wallet === (await getHecAddress()).toLowerCase()) {
         return res.status(400).json({
-          error: "The HEC wallet cannot apply as an institution. Use another account.",
+          error:
+            "The HEC wallet cannot apply as an institution. Use another account.",
         });
       }
 
@@ -97,14 +106,20 @@ app.post(
 
       if (inst.accreditation_status === "ACCREDITED") {
         return sameWallet
-          ? res.json({ message: `${inst.name} is already accredited`, institution: inst })
+          ? res.json({
+              message: `${inst.name} is already accredited`,
+              institution: inst,
+            })
           : res.status(403).json({
               error: `${inst.name} (${inst.code}) is already accredited under another wallet.`,
             });
       }
       if (inst.accreditation_status === "PENDING") {
         return sameWallet
-          ? res.json({ message: `Your application for ${inst.name} is already pending`, institution: inst })
+          ? res.json({
+              message: `Your application for ${inst.name} is already pending`,
+              institution: inst,
+            })
           : res.status(403).json({
               error: `${inst.name} (${inst.code}) already has a pending application from another wallet.`,
             });
@@ -136,7 +151,8 @@ app.post(
       );
       if (updated.rows.length === 0) {
         return res.status(409).json({
-          error: "This institution changed status while you applied. Reload and try again.",
+          error:
+            "This institution changed status while you applied. Reload and try again.",
         });
       }
       res.status(201).json({
@@ -174,15 +190,20 @@ app.post(
   async (req: Request, res: Response) => {
     try {
       const inst = await loadInstitution(req.params.code as string);
-      if (!inst) return res.status(404).json({ error: "Institution not found" });
-      if (!["PENDING", "SUSPENDED"].includes(inst.accreditation_status) || !inst.wallet_address) {
+      if (!inst)
+        return res.status(404).json({ error: "Institution not found" });
+      if (
+        !["PENDING", "SUSPENDED"].includes(inst.accreditation_status) ||
+        !inst.wallet_address
+      ) {
         return res.status(409).json({
           error: `${inst.code} is ${inst.accreditation_status} and cannot be approved now.`,
         });
       }
       if (!(await waitForChainState(inst.wallet_address, true))) {
         return res.status(409).json({
-          error: "The contract does not list this wallet yet. Send the accreditIssuer transaction first.",
+          error:
+            "The contract does not list this wallet yet. Send the accreditIssuer transaction first.",
         });
       }
       const updated = await query(
@@ -207,7 +228,8 @@ app.post(
   async (req: Request, res: Response) => {
     try {
       const inst = await loadInstitution(req.params.code as string);
-      if (!inst) return res.status(404).json({ error: "Institution not found" });
+      if (!inst)
+        return res.status(404).json({ error: "Institution not found" });
       if (inst.accreditation_status !== "PENDING") {
         return res.status(409).json({
           error: `${inst.code} is ${inst.accreditation_status}. Only pending applications can be rejected.`,
@@ -235,7 +257,8 @@ app.post(
   async (req: Request, res: Response) => {
     try {
       const inst = await loadInstitution(req.params.code as string);
-      if (!inst) return res.status(404).json({ error: "Institution not found" });
+      if (!inst)
+        return res.status(404).json({ error: "Institution not found" });
       if (inst.accreditation_status !== "ACCREDITED" || !inst.wallet_address) {
         return res.status(409).json({
           error: `${inst.code} is ${inst.accreditation_status}. Only accredited institutions can be suspended.`,
@@ -243,7 +266,8 @@ app.post(
       }
       if (!(await waitForChainState(inst.wallet_address, false))) {
         return res.status(409).json({
-          error: "The contract still lists this wallet. Send the suspendIssuer transaction first.",
+          error:
+            "The contract still lists this wallet. Send the suspendIssuer transaction first.",
         });
       }
       const updated = await query(
@@ -302,9 +326,12 @@ app.post(
       }
 
       // The contract is the source of truth: HEC must currently list this wallet
-      if (!(await isIssuerAccredited((req as AuthedRequest).wallet as string))) {
+      if (
+        !(await isIssuerAccredited((req as AuthedRequest).wallet as string))
+      ) {
         return res.status(403).json({
-          error: "HEC has not accredited this wallet on-chain, so it cannot anchor credentials.",
+          error:
+            "HEC has not accredited this wallet on-chain, so it cannot anchor credentials.",
         });
       }
 
@@ -323,21 +350,21 @@ app.post(
 
       const instRecord = instRes.rows[0];
 
-      // Step 4 (Figure 3.5a): The unique number printed on the certificate is the reference code.
-      // It is part of the hashed fields and does the job a random salt used to do.
-      const finalReferenceCode = credentialId.trim().toUpperCase();
+      // Step 4 (Figure 3.5a): The reference code is the institution code plus the unique number
+      // printed on the certificate. It is part of the hashed fields and does the job a random
+      // salt used to do.
+      const certNumber = normalizeCertNumber(String(credentialId));
+      const finalReferenceCode = makeReferenceCode(instRecord.code, certNumber);
 
-      const credentialHash = computeCredentialHash(
-        {
-          institution: instRecord.code,
-          credentialId: finalReferenceCode,
-          holderName,
-          degreeTitle,
-          programme: programme || "",
-          classification,
-          awardDate,
-        },
-      );
+      const credentialHash = computeCredentialHash({
+        institution: instRecord.code,
+        credentialId: finalReferenceCode,
+        holderName,
+        degreeTitle,
+        programme: programme || "",
+        classification,
+        awardDate,
+      });
 
       const holderReference = computeHolderReference(
         holderName,
@@ -362,13 +389,14 @@ app.post(
 
       // Generate QR code carrying the verification link with the reference_code pre-filled
       const frontendBase = process.env.FRONTEND_URL || "http://localhost:5173";
-      const verifyUrl = `${frontendBase}/verify?ref=${encodeURIComponent(finalReferenceCode)}&inst=${encodeURIComponent(instRecord.code)}`;
+      const verifyUrl = `${frontendBase}/verify?ref=${encodeURIComponent(certNumber)}&inst=${encodeURIComponent(instRecord.code)}`;
       const qrCodeDataUrl = await QRCode.toDataURL(verifyUrl);
 
       // Step 5 (Figure 3.5a): Return hash, reference code, and QR code for MetaMask signing & document stamping
       res.status(201).json({
         credential: dbInsert.rows[0],
         referenceCode: finalReferenceCode,
+        certificateNumber: certNumber,
         credentialHash,
         qrCodeDataUrl,
         verifyUrl,
@@ -378,7 +406,7 @@ app.post(
       if (err.code === "23505") {
         return res.status(409).json({
           error:
-            "A credential with this reference code or hash already exists.",
+            "This institution has already issued a credential with this certificate number.",
         });
       }
       res.status(500).json({ error: err.message });
@@ -442,9 +470,15 @@ app.post("/api/credentials/verify", async (req: Request, res: Response) => {
       scenarioType = "GENUINE", // Supports Section 3.2.4 Evaluation logging ('GENUINE', 'TAMPERED', 'FABRICATED', 'REVOKED')
     } = req.body;
 
-    const lookupCode = (referenceCode || credentialId || "")
-      .trim()
-      .toUpperCase();
+    // The verifier types the certificate number and picks the institution; together they
+    // form the stored reference code.
+    const certNumber = normalizeCertNumber(
+      String(referenceCode || credentialId || ""),
+    );
+    const lookupCode =
+      certNumber && institution
+        ? makeReferenceCode(String(institution), certNumber)
+        : "";
 
     // Functional Requirement 7: Mandatory field re-entry (no bare reference-code lookup allowed)
     if (
@@ -477,17 +511,15 @@ app.post("/api/credentials/verify", async (req: Request, res: Response) => {
       const dbRecord = credRes.rows[0];
 
       // Step 4 (Figure 3.5b): Recompute the hash from the entered fields (the certificate number is one of the hashed fields)
-      const recomputedHash = computeCredentialHash(
-        {
-          institution,
-          credentialId: lookupCode,
-          holderName,
-          degreeTitle,
-          programme: programme || "",
-          classification,
-          awardDate,
-        },
-      );
+      const recomputedHash = computeCredentialHash({
+        institution,
+        credentialId: lookupCode,
+        holderName,
+        degreeTitle,
+        programme: programme || "",
+        classification,
+        awardDate,
+      });
 
       // Steps 5-8 (Figure 3.5b): Query anchored hash and revocation status from Sepolia Smart Contract
       const onChain = await getOnChainCredential(lookupCode);
@@ -557,6 +589,7 @@ app.post("/api/credentials/verify", async (req: Request, res: Response) => {
     // Step 10 (Figure 3.5b): Return result
     res.json({
       referenceCode: lookupCode,
+      certificateNumber: certNumber,
       result: outcome,
       responseTimeMs,
       scenarioType: scenarioType.toUpperCase(),
@@ -568,16 +601,21 @@ app.post("/api/credentials/verify", async (req: Request, res: Response) => {
 });
 
 // 7. Get Evaluation Logs (Supports Section 3.2.4 Metrics for Evaluation). HEC wallet only.
-app.get("/api/logs", requireWallet, requireHec, async (_req: Request, res: Response) => {
-  try {
-    const logs = await query(
-      "SELECT * FROM verification_logs ORDER BY timestamp DESC LIMIT 100",
-    );
-    res.json(logs.rows);
-  } catch (err: any) {
-    res.status(500).json({ error: err.message });
-  }
-});
+app.get(
+  "/api/logs",
+  requireWallet,
+  requireHec,
+  async (_req: Request, res: Response) => {
+    try {
+      const logs = await query(
+        "SELECT * FROM verification_logs ORDER BY timestamp DESC LIMIT 100",
+      );
+      res.json(logs.rows);
+    } catch (err: any) {
+      res.status(500).json({ error: err.message });
+    }
+  },
+);
 
 const PORT = process.env.PORT || 4000;
 app.listen(PORT, () => {

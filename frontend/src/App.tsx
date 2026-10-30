@@ -118,6 +118,14 @@ function sameAddress(a?: string | null, b?: string | null) {
   return !!a && !!b && a.toLowerCase() === b.toLowerCase();
 }
 
+// Stored reference codes look like "UNIVA-220001624". Show only the certificate number.
+function certNumberOf(referenceCode: string, institutionCode: string) {
+  const prefix = `${institutionCode}-`;
+  return referenceCode.startsWith(prefix)
+    ? referenceCode.slice(prefix.length)
+    : referenceCode;
+}
+
 function ToneIcon({ tone, size = 24 }: { tone: Tone; size?: number }) {
   const common = {
     width: size,
@@ -527,8 +535,8 @@ function AboutPage() {
               <strong>The hash is anchored on Ethereum Sepolia.</strong>
               <span>
                 The institution signs a transaction with its MetaMask wallet.
-                The contract stores the hash, the certificate number, the
-                issuing wallet and the time.
+                The contract stores the hash, the certificate number with the
+                institution code in front, the issuing wallet and the time.
               </span>
             </li>
             <li>
@@ -610,7 +618,8 @@ function AboutPage() {
             confirms that a certificate's details match a record anchored by an
             accredited institution. It does not confirm who is presenting the
             certificate. The certificate number is stored on the chain in
-            plain form, because it is the reference code.
+            plain form, with the institution code in front, because it is part
+            of the reference code.
           </p>
         </section>
       </div>
@@ -671,8 +680,8 @@ function GuidePage() {
             <li>
               <strong>Add the QR code to the certificate</strong>
               <span>
-                The result shows a QR code and the reference code. Print them
-                on the document so verifiers can find the record.
+                The result shows a QR code and the certificate number. Print the
+                QR code on the document so verifiers can find the record.
               </span>
             </li>
             <li>
@@ -1333,6 +1342,7 @@ function IssueDegreePage({
   const [issuingLoading, setIssuingLoading] = useState(false);
   const [issuedResult, setIssuedResult] = useState<{
     referenceCode: string;
+    certificateNumber: string;
     credentialHash: string;
     qrCodeDataUrl: string;
     txHash: string;
@@ -1402,7 +1412,8 @@ function IssueDegreePage({
         throw new Error(prepData.error ?? "Failed to prepare credential");
       }
 
-      const { credentialHash, referenceCode, qrCodeDataUrl } = prepData;
+      const { credentialHash, referenceCode, certificateNumber, qrCodeDataUrl } =
+        prepData;
 
       const ethereum = (window as any).ethereum;
       const browserProvider = new ethers.BrowserProvider(ethereum);
@@ -1418,6 +1429,7 @@ function IssueDegreePage({
 
       setIssuedResult({
         referenceCode,
+        certificateNumber,
         credentialHash,
         qrCodeDataUrl,
         txHash: receipt.hash,
@@ -1688,8 +1700,9 @@ function IssueDegreePage({
                   }
                 />
                 <span className="field-hint">
-                  The unique number printed on the certificate. It is the
-                  reference code and keeps each hash unique.
+                  The unique number printed on the certificate. An institution
+                  can use each number once. Other institutions may use the
+                  same number.
                 </span>
               </label>
 
@@ -1799,8 +1812,8 @@ function IssueDegreePage({
               <div>
                 <h3>Credential anchored on Sepolia</h3>
                 <p>
-                  Write the reference code on the document so anyone can verify
-                  it.
+                  Print the QR code and the certificate number on the document so
+                  anyone can verify it.
                 </p>
               </div>
             </div>
@@ -1808,11 +1821,15 @@ function IssueDegreePage({
             <div className="issued-grid">
               <dl className="facts">
                 <div className="fact">
-                  <dt>Reference code</dt>
+                  <dt>Certificate number</dt>
+                  <dd className="mono">{issuedResult.certificateNumber}</dd>
+                </div>
+                <div className="fact">
+                  <dt>On-chain reference</dt>
                   <dd className="mono">{issuedResult.referenceCode}</dd>
                 </div>
                 <div className="fact">
-                  <dt>Salted SHA-256 hash</dt>
+                  <dt>SHA-256 hash</dt>
                   <dd>
                     <span className="hash">{issuedResult.credentialHash}</span>
                   </dd>
@@ -1844,7 +1861,7 @@ function IssueDegreePage({
                   onClick={() =>
                     navigate(
                       `/verify?ref=${encodeURIComponent(
-                        issuedResult.referenceCode,
+                        issuedResult.certificateNumber,
                       )}&inst=${encodeURIComponent(uniCode)}`,
                     )
                   }
@@ -1869,7 +1886,7 @@ function IssueDegreePage({
             <table>
               <thead>
                 <tr>
-                  <th>Reference code</th>
+                  <th>Certificate number</th>
                   <th>Anchored hash</th>
                   <th>Holder reference</th>
                   <th>Award date</th>
@@ -1881,7 +1898,7 @@ function IssueDegreePage({
                 {credentials.map((c) => (
                   <tr key={c.credential_id}>
                     <td className="mono">
-                      <strong>{c.reference_code}</strong>
+                      <strong>{certNumberOf(c.reference_code, uniCode)}</strong>
                     </td>
                     <td className="mono">
                       {c.credential_hash.slice(0, 14)}...
@@ -1909,7 +1926,7 @@ function IssueDegreePage({
                           onClick={() =>
                             handleRevokeCredential(
                               c.credential_hash,
-                              c.reference_code,
+                              certNumberOf(c.reference_code, uniCode),
                             )
                           }
                         >
@@ -2202,8 +2219,11 @@ function VerifyPage({ institutions }: { institutions: Institution[] }) {
 
               <dl className="facts">
                 <div className="fact">
-                  <dt>Reference code</dt>
-                  <dd className="mono">{verifyResponse.referenceCode}</dd>
+                  <dt>Certificate number</dt>
+                  <dd className="mono">
+                    {verifyResponse.certificateNumber ??
+                      verifyResponse.referenceCode}
+                  </dd>
                 </div>
                 <div className="fact">
                   <dt>Response time</dt>
