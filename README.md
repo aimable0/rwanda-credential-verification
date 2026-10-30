@@ -2,13 +2,11 @@
 
 A web platform where accredited institutions anchor degree and licence credentials on Ethereum Sepolia, and anyone can check a certificate by scanning its QR code or entering the details printed on it. Institutions join only after the HEC admin wallet approves them, and the smart contract enforces that rule.
 
-- **Live demo:** [LIVE_URL]
-- **Video walkthrough:** [VIDEO_URL]
+- **Live website:** https://credentials.aimable.dev/
+- **Video walkthrough:** https://youtu.be/5a1mdBibjNQ
 - **Technical report:** [REPORT_URL]
-- **Contract on Sepolia:** [`CONTRACT_ADDRESS`](https://sepolia.etherscan.io/address/CONTRACT_ADDRESS)
+- **Contract on Sepolia:** https://sepolia.etherscan.io/address/0x0870591E64752fD591003E2224BfF342f05F9F49
 
-<!-- Add a screenshot of the verification result here: docs/images/verify-genuine.png -->
-![Verification result](docs/images/verify-genuine.png)
 
 ## How it works
 
@@ -55,7 +53,7 @@ A certificate number is unique per institution. One institution cannot use the s
 ├── contracts/   Foundry project: CredentialRegistry.sol, tests, deploy script
 ├── backend/     Express API: routes, wallet auth, hashing, database schema
 ├── frontend/    React app
-└── DEPLOY.md    Server deployment guide
+└── README.md    
 ```
 
 ## Prerequisites
@@ -147,9 +145,6 @@ The frontend reads the API address from `VITE_API_BASE` (default `http://localho
 6. Change one letter in the name and verify again. The result is *Mismatch or not found* and shows no record details.
 7. Revoke the credential as UNIVA and verify again. The result is *Genuine but revoked*.
 
-<!-- Add screenshots: docs/images/hec-admin.png, docs/images/issue-credential.png -->
-![HEC admin](docs/images/hec-admin.png)
-![Issue credential](docs/images/issue-credential.png)
 
 ## Testing
 
@@ -195,8 +190,7 @@ ORDER BY scenario_type;
 ## Known limitations
 
 - Runs on the Sepolia test network, not on a production chain.
-- One HEC wallet controls accreditation. A multi-signature wallet would be the next step.
-- Without a random salt, someone who knows a certificate number can test guesses of the other fields against the on-chain hash.
+- One simulated "HEC" wallet controls accreditation. A multi-signature wallet would be the next step.
 - The system checks a certificate's details, not the identity of the person presenting it.
 
 ## Author

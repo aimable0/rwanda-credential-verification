@@ -12,7 +12,8 @@ import {
 import { ethers } from "ethers";
 import "./App.css";
 
-// Local dev talks to the backend directly. A production build sets VITE_API_BASE=/api.
+// Local dev talks to the backend directly.
+// Note: A production build sets VITE_API_BASE=/api.
 const API_BASE: string =
   import.meta.env.VITE_API_BASE ?? "http://localhost:4000/api";
 const SEPOLIA_CHAIN_ID_HEX = "0xaa36a7";

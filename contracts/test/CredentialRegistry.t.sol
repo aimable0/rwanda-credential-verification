@@ -12,8 +12,8 @@ contract CredentialRegistryTest is Test {
     address public univB = address(0x2222);
     address public outsider = address(0x9999);
 
-    // Redeclared so the test also compiles on Solidity 0.8.20 (events cannot be
-    // referenced through the contract name before 0.8.21)
+    // Redeclared so the test also compiles on Solidity 0.8.20
+    // (events cannot be referenced through the contract name before 0.8.21)
     event IssuerAccredited(address indexed issuer, uint256 timestamp);
 
     bytes32 public sampleHash = keccak256("UNIVA|220001624|HOLDER|BSC|SE|FIRST_CLASS_HONOURS|2026-06-15");

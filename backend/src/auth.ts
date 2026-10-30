@@ -1,15 +1,13 @@
-// backend/src/auth.ts
+// Auth.ts
 //
-// Wallet sign-in plus per-institution access control. No new npm packages:
-// it uses node's crypto, ethers (already installed) and express types.
+// Wallet sign-in plus per-institution access control.
+// it uses node's crypto, ethers and express types.
 //
 // Flow:
 //   1. POST /api/auth/nonce  { walletAddress }            -> { message }
 //   2. The browser asks MetaMask to sign `message` (personal_sign)
 //   3. POST /api/auth/login  { walletAddress, signature } -> { token }
 //   4. The browser sends  Authorization: Bearer <token>  on protected routes
-//
-// Add AUTH_SECRET=<long random string> to backend/.env.
 
 import crypto from "crypto";
 import { ethers } from "ethers";

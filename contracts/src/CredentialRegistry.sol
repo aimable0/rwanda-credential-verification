@@ -66,7 +66,7 @@ contract CredentialRegistry {
         _;
     }
 
-    /// @param _hec The wallet that represents HEC. It does not have to be the deployer.
+    /// @param _hec The wallet that represents HEC.
     constructor(address _hec) {
         if (_hec == address(0)) revert ZeroAddress();
         hec = _hec;
