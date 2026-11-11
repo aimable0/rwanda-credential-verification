@@ -71,15 +71,17 @@ app.get("/api/institutions", async (_req: Request, res: Response) => {
 });
 
 // 3. Apply for accreditation. The applicant's wallet comes from the signed token.
-// The institution becomes PENDING until the HEC wallet approves or rejects it.
+// Any institution can register itself by submitting its code and name. A new code
+// creates a PENDING row; an existing code can re-apply only if it is UNREGISTERED
+// or REJECTED. The institution stays PENDING until HEC approves or rejects it.
 app.post(
   "/api/institutions/apply",
   requireWallet,
   async (req: Request, res: Response) => {
     try {
-      const { code } = req.body;
+      const { code, name, institutionType } = req.body;
       const wallet = (req as AuthedRequest).wallet as string; // lowercase, verified
-      if (!code) {
+      if (!code || !String(code).trim()) {
         return res.status(400).json({ error: "code is required" });
       }
 
@@ -90,16 +92,67 @@ app.post(
         });
       }
 
-      const normalizedCode = code.trim().toUpperCase();
+      const normalizedCode = String(code).trim().toUpperCase();
+      if (!/^[A-Z0-9]{2,20}$/.test(normalizedCode)) {
+        return res.status(400).json({
+          error:
+            "Institution code must be 2-20 letters or digits (e.g. UNIVA).",
+        });
+      }
+
       const instResult = await query(
         "SELECT * FROM institutions WHERE code = $1",
         [normalizedCode],
       );
+
       if (instResult.rows.length === 0) {
-        return res
-          .status(404)
-          .json({ error: "Institution not found in the registry" });
+        // New institution: register it directly as a pending application.
+        const trimmedName = String(name ?? "").trim();
+        if (!trimmedName) {
+          return res.status(400).json({
+            error: "name is required to register a new institution",
+          });
+        }
+        const type = ["UNIVERSITY", "LICENSING_BODY"].includes(
+          String(institutionType ?? "").toUpperCase(),
+        )
+          ? String(institutionType).toUpperCase()
+          : "UNIVERSITY";
+
+        // One wallet represents at most one institution.
+        const other = await query(
+          "SELECT code, name FROM institutions WHERE LOWER(wallet_address) = $1",
+          [wallet],
+        );
+        if (other.rows.length > 0) {
+          return res.status(409).json({
+            error: `This wallet already represents ${other.rows[0].name} (${other.rows[0].code}). Switch to another MetaMask account to register ${trimmedName} (${normalizedCode}).`,
+          });
+        }
+
+        try {
+          const created = await query(
+            `INSERT INTO institutions
+               (code, name, institution_type, wallet_address, accreditation_status, requested_at)
+             VALUES ($1, $2, $3, $4, 'PENDING', NOW())
+             RETURNING *`,
+            [normalizedCode, trimmedName, type, wallet],
+          );
+          return res.status(201).json({
+            message: `Application for ${trimmedName} (${normalizedCode}) sent to HEC`,
+            institution: created.rows[0],
+          });
+        } catch (insertErr: any) {
+          if (insertErr.code === "23505") {
+            return res.status(409).json({
+              error:
+                "This institution code or wallet was just registered by someone else. Reload and try again.",
+            });
+          }
+          throw insertErr;
+        }
       }
+
       const inst = instResult.rows[0];
       const sameWallet =
         !!inst.wallet_address && inst.wallet_address.toLowerCase() === wallet;

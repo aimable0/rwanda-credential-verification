@@ -5,7 +5,7 @@ DROP TABLE IF EXISTS institutions CASCADE;
 
 -- 1. institutions table
 -- accreditation_status lifecycle:
---   UNREGISTERED -> PENDING (institution applies) -> ACCREDITED (HEC approves on-chain)
+--   (institution self-registers with code + name) -> PENDING -> ACCREDITED (HEC approves on-chain)
 --   PENDING -> REJECTED (HEC rejects; the institution may apply again)
 --   ACCREDITED -> SUSPENDED (HEC suspends on-chain; HEC can approve again later)
 -- The HEC wallet itself is not stored here. It is the immutable `hec` address in the contract.
@@ -51,9 +51,5 @@ CREATE TABLE verification_logs (
 CREATE INDEX idx_credentials_reference_code ON credentials(reference_code);
 CREATE INDEX idx_verification_logs_reference_code ON verification_logs(reference_code);
 
--- Registry entries. Every institution starts without a wallet and must apply to HEC.
-INSERT INTO institutions (code, name, institution_type, wallet_address, accreditation_status)
-VALUES
-    ('UNIVA', 'University A', 'UNIVERSITY', NULL, 'UNREGISTERED'),
-    ('UNIVB', 'University B', 'UNIVERSITY', NULL, 'UNREGISTERED'),
-    ('FAKEU', 'Unaccredited Diploma Mill Institute', 'UNIVERSITY', NULL, 'UNREGISTERED');
+-- No seed rows: institutions register themselves through POST /api/institutions/apply
+-- by submitting their code and name, and wait as PENDING until HEC decides.

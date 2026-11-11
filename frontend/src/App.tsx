@@ -658,8 +658,8 @@ function GuidePage() {
             <li>
               <strong>Apply for accreditation</strong>
               <span>
-                Pick your institution and select Apply to HEC. Its status shows
-                as pending.
+                Enter your institution's code and name, then select Apply to
+                HEC. Its status shows as pending.
               </span>
             </li>
             <li>
@@ -805,14 +805,19 @@ function RegisterPage({
   backendError: string | null;
   authFetch: AuthFetch;
 }) {
-  const [selectedCode, setSelectedCode] = useState<string>("UNIVA");
+  const [form, setForm] = useState({
+    code: "",
+    name: "",
+    institutionType: "UNIVERSITY",
+  });
   const [statusMsg, setStatusMsg] = useState<{
     type: "ok" | "err";
     text: string;
   } | null>(null);
   const [loading, setLoading] = useState(false);
 
-  const selectedInst = institutions.find((i) => i.code === selectedCode);
+  const normalizedCode = form.code.trim().toUpperCase();
+  const selectedInst = institutions.find((i) => i.code === normalizedCode);
   const isHec = sameAddress(walletAddress, hecAddress);
   const status = selectedInst?.accreditation_status ?? "UNREGISTERED";
   const mine = sameAddress(walletAddress, selectedInst?.wallet_address);
@@ -822,6 +827,8 @@ function RegisterPage({
   const canApply =
     !!walletAddress &&
     !isHec &&
+    !!normalizedCode &&
+    !!form.name.trim() &&
     (status === "UNREGISTERED" || status === "REJECTED");
 
   let hint: { tone: Tone; text: string } | null = null;
@@ -830,24 +837,24 @@ function RegisterPage({
       tone: "warn",
       text: "You are connected as the HEC wallet. Review applications on the HEC admin tab.",
     };
-  } else if (status === "PENDING") {
+  } else if (selectedInst && status === "PENDING") {
     hint = {
       tone: "warn",
       text: mine
         ? "Your application is waiting for HEC review."
-        : `${selectedCode} has a pending application from another wallet.`,
+        : `${selectedInst.name} (${normalizedCode}) already has a pending application from another wallet.`,
     };
-  } else if (status === "ACCREDITED") {
+  } else if (selectedInst && status === "ACCREDITED") {
     hint = mine
       ? { tone: "ok", text: "Accredited. Open your portal from the table below." }
       : {
           tone: "warn",
-          text: `${selectedCode} is accredited under another wallet.`,
+          text: `${selectedInst.name} (${normalizedCode}) is already accredited under another wallet.`,
         };
-  } else if (status === "SUSPENDED") {
+  } else if (selectedInst && status === "SUSPENDED") {
     hint = {
       tone: "bad",
-      text: `HEC has suspended ${selectedCode}. Contact HEC to be reinstated.`,
+      text: `HEC has suspended ${normalizedCode}. Contact HEC to be reinstated.`,
     };
   } else if (status === "REJECTED" && mine) {
     hint = {
@@ -855,15 +862,6 @@ function RegisterPage({
       text: "HEC rejected your last application. You can apply again.",
     };
   }
-
-  useEffect(() => {
-    if (
-      institutions.length > 0 &&
-      !institutions.find((i) => i.code === selectedCode)
-    ) {
-      setSelectedCode(institutions[0].code);
-    }
-  }, [institutions, selectedCode]);
 
   async function handleApply(e: React.FormEvent) {
     e.preventDefault();
@@ -877,12 +875,24 @@ function RegisterPage({
       return;
     }
 
+    if (!/^[A-Z0-9]{2,20}$/.test(normalizedCode)) {
+      setStatusMsg({
+        type: "err",
+        text: "The institution code must be 2-20 letters or digits, e.g. UNIVA.",
+      });
+      return;
+    }
+
     setLoading(true);
     try {
       const res = await authFetch(`${API_BASE}/institutions/apply`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ code: selectedCode }),
+        body: JSON.stringify({
+          code: normalizedCode,
+          name: form.name.trim(),
+          institutionType: form.institutionType,
+        }),
       });
       const data = await res.json();
       if (!res.ok) {
@@ -919,29 +929,53 @@ function RegisterPage({
         <section className="panel">
           <h2 className="panel-title">Apply for accreditation</h2>
           <p className="panel-text">
-            Choose your institution and connect the wallet that will issue its
-            credentials.
+            Enter your institution's code and name, then connect the wallet
+            that will issue its credentials and send the application to HEC.
           </p>
 
           <form onSubmit={handleApply}>
-            <div className="inline-form">
+            <div className="field-grid">
               <label className="field">
-                <span className="field-label">Institution</span>
-                <select
-                  value={selectedCode}
-                  onChange={(e) => setSelectedCode(e.target.value)}
-                >
-                  {institutions.map((inst) => (
-                    <option key={inst.code} value={inst.code}>
-                      {inst.code} - {inst.name} (
-                      {STATUS_META[inst.accreditation_status]?.label ??
-                        sentence(inst.accreditation_status)}
-                      )
-                    </option>
-                  ))}
-                </select>
+                <span className="field-label">Institution code *</span>
+                <input
+                  type="text"
+                  required
+                  placeholder="e.g. UNIVA"
+                  value={form.code}
+                  onChange={(e) => setForm({ ...form, code: e.target.value })}
+                />
+                <span className="field-hint">
+                  A short unique code (2-20 letters or digits). It prefixes
+                  every certificate number you issue.
+                </span>
               </label>
 
+              <label className="field">
+                <span className="field-label">Institution name *</span>
+                <input
+                  type="text"
+                  required
+                  placeholder="e.g. University of Rwanda"
+                  value={form.name}
+                  onChange={(e) => setForm({ ...form, name: e.target.value })}
+                />
+              </label>
+
+              <label className="field">
+                <span className="field-label">Institution type</span>
+                <select
+                  value={form.institutionType}
+                  onChange={(e) =>
+                    setForm({ ...form, institutionType: e.target.value })
+                  }
+                >
+                  <option value="UNIVERSITY">University</option>
+                  <option value="LICENSING_BODY">Licensing body</option>
+                </select>
+              </label>
+            </div>
+
+            <div className="form-actions">
               {!walletAddress ? (
                 <button
                   type="button"
@@ -1962,7 +1996,7 @@ function VerifyPage({ institutions }: { institutions: Institution[] }) {
   const [searchParams] = useSearchParams();
   const [verifyForm, setVerifyForm] = useState({
     referenceCode: searchParams.get("ref") ?? "",
-    institution: searchParams.get("inst") ?? "UNIVA",
+    institution: searchParams.get("inst") ?? "",
     holderName: "",
     degreeTitle: "",
     programme: "",
@@ -2040,11 +2074,15 @@ function VerifyPage({ institutions }: { institutions: Institution[] }) {
               <label className="field">
                 <span className="field-label">Issuing institution *</span>
                 <select
+                  required
                   value={verifyForm.institution}
                   onChange={(e) =>
                     setVerifyForm({ ...verifyForm, institution: e.target.value })
                   }
                 >
+                  <option value="" disabled>
+                    Select the issuing institution
+                  </option>
                   {institutions.map((inst) => (
                     <option key={inst.code} value={inst.code}>
                       {inst.code} - {inst.name}

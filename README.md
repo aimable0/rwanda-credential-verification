@@ -103,7 +103,7 @@ createdb rwanda_credentials_db
 psql rwanda_credentials_db -f backend/src/db/schema.sql
 ```
 
-`schema.sql` drops and recreates all tables, so run it only on a new database. It seeds three institutions (UNIVA, UNIVB, FAKEU) that have not applied yet.
+`schema.sql` drops and recreates all tables, so run it only on a new database (or when you want to wipe all data). It seeds no institutions: each institution registers itself by entering its code and name on the institution page.
 
 ### 4. Backend
 
@@ -138,7 +138,7 @@ The frontend reads the API address from `VITE_API_BASE` (default `http://localho
 ## Try it
 
 1. Open the app with the HEC account and check that **HEC admin** works at `/admin`.
-2. Switch to the UNIVA account, open **Institution sign in**, and apply. The status becomes *Pending*.
+2. Switch to another account, open **Institution sign in**, enter a code (for example `UNIVA`) and a name, and apply. The status becomes *Pending*.
 3. Switch back to HEC, open `/admin`, and approve UNIVA. MetaMask asks you to sign one transaction.
 4. As UNIVA, open **Issue credentials**, sign in with MetaMask, and issue a credential. Keep the QR code.
 5. Open `/verify` (or scan the QR code), enter the printed details, and verify. The result is *Genuine and active*.
