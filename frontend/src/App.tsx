@@ -62,6 +62,7 @@ interface CredentialRow {
   institution_code: string;
   institution_name: string;
   revoked_at?: number | null; // unix seconds when revoked on-chain, null if active
+  chain_status?: "ANCHORED" | "NOT_ANCHORED" | "HASH_MISMATCH" | "UNKNOWN";
 }
 
 interface VerificationLogRow {
@@ -1390,6 +1391,13 @@ function IssueDegreePage({
   const [revokeMsg, setRevokeMsg] = useState<string | null>(null);
   const [signingIn, setSigningIn] = useState(false);
   const [signInError, setSignInError] = useState<string | null>(null);
+  const refreshTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  useEffect(() => {
+    return () => {
+      if (refreshTimer.current) clearTimeout(refreshTimer.current);
+    };
+  }, []);
 
   useEffect(() => {
     if (isOwner && token) {
@@ -1472,8 +1480,23 @@ function IssueDegreePage({
       });
 
       fetchUniversityCredentials();
+      // The RPC node can lag one block behind, so read the list again shortly after
+      if (refreshTimer.current) clearTimeout(refreshTimer.current);
+      refreshTimer.current = setTimeout(fetchUniversityCredentials, 4000);
     } catch (err: any) {
-      const msg = err.shortMessage ? err.shortMessage : err.message;
+      let msg: string | undefined;
+      if (err.code === "ACTION_REJECTED") {
+        msg =
+          "You rejected the transaction in MetaMask. Nothing was issued. Click the button to try again.";
+      } else if (err.code === "INSUFFICIENT_FUNDS") {
+        msg =
+          "Your account has no Sepolia ETH to pay the network fee. Get some from a Sepolia faucet, then try again.";
+      } else if (err.code === "CALL_EXCEPTION") {
+        msg =
+          "The blockchain rejected this transaction. This certificate number may already be issued. Check the list below, or try a different number.";
+      } else {
+        msg = err.shortMessage ?? err.message;
+      }
       setIssueError(msg ?? "Issuance failed");
     } finally {
       setIssuingLoading(false);
@@ -1942,17 +1965,30 @@ function IssueDegreePage({
                     <td className="mono">{c.holder_reference}</td>
                     <td>{String(c.issuance_date).slice(0, 10)}</td>
                     <td>
-                      <span
-                        className={`badge ${c.revoked_at ? "tone-warn" : "tone-ok"}`}
-                      >
-                        {c.revoked_at ? "Revoked" : "Active"}
-                      </span>
+                      {c.revoked_at ? (
+                        <span className="badge tone-warn">Revoked</span>
+                      ) : c.chain_status === "NOT_ANCHORED" ? (
+                        <span className="badge tone-warn">Not anchored</span>
+                      ) : c.chain_status === "HASH_MISMATCH" ? (
+                        <span className="badge tone-bad">Hash mismatch</span>
+                      ) : (
+                        <span className="badge tone-ok">Active</span>
+                      )}
                     </td>
                     <td>
                       {c.revoked_at ? (
                         <span className="muted">
                           Revoked on{" "}
                           {new Date(c.revoked_at * 1000).toLocaleDateString()}
+                        </span>
+                      ) : c.chain_status === "NOT_ANCHORED" ? (
+                        <span className="muted">
+                          Not on the blockchain yet. Issue it again with the
+                          same certificate number.
+                        </span>
+                      ) : c.chain_status === "HASH_MISMATCH" ? (
+                        <span className="muted">
+                          Needs attention. Contact the administrator.
                         </span>
                       ) : (
                         <button

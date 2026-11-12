@@ -12,7 +12,6 @@ import {
 import {
   getHecAddress,
   getOnChainCredential,
-  getRevocationTimestamp,
   isIssuerAccredited,
 } from "./services/blockchain";
 import {
@@ -424,11 +423,34 @@ app.post(
         finalReferenceCode,
       );
 
-      // Save non-PII credential record (hash + reference_code) in PostgreSQL
+      // The chain decides whether this number is taken. A database row without an
+      // on-chain record is a leftover from a cancelled or failed transaction.
+      let onChain;
+      try {
+        onChain = await getOnChainCredential(finalReferenceCode);
+      } catch {
+        return res.status(503).json({
+          error: "Could not check the blockchain right now. Please try again.",
+        });
+      }
+      if (onChain.exists) {
+        return res.status(409).json({
+          error:
+            "This certificate number has already been anchored on the blockchain for this institution. Use a different certificate number.",
+        });
+      }
+
+      // Save non-PII credential record (hash + reference_code) in PostgreSQL.
+      // A leftover row for the same reference code is overwritten with the new values.
       const dbInsert = await query(
         `INSERT INTO credentials
           (institution_id, reference_code, credential_hash, holder_reference, issuance_date, credential_type)
          VALUES ($1, $2, $3, $4, $5, $6)
+         ON CONFLICT (reference_code) DO UPDATE SET
+           credential_hash = EXCLUDED.credential_hash,
+           holder_reference = EXCLUDED.holder_reference,
+           issuance_date = EXCLUDED.issuance_date,
+           credential_type = EXCLUDED.credential_type
          RETURNING credential_id, reference_code, credential_hash, holder_reference, issuance_date, credential_type`,
         [
           instRecord.institution_id,
@@ -487,15 +509,30 @@ app.get(
          ORDER BY c.credential_id DESC`,
         [institutionCode],
       );
-      // Revocation lives on-chain only, so read it for each credential.
-      // revoked_at is null for active credentials and undefined if the chain could not be read.
+      // Anchoring and revocation live on-chain only, so read them for each credential.
       const rows = await Promise.all(
         result.rows.map(async (r: any) => {
           try {
-            const ts = await getRevocationTimestamp(r.credential_hash);
-            return { ...r, revoked_at: ts > 0 ? ts : null };
+            const onChain = await getOnChainCredential(r.reference_code);
+            if (!onChain.exists) {
+              return { ...r, chain_status: "NOT_ANCHORED", revoked_at: null };
+            }
+            if (
+              onChain.credentialHash.toLowerCase() !==
+              String(r.credential_hash).toLowerCase()
+            ) {
+              return { ...r, chain_status: "HASH_MISMATCH", revoked_at: null };
+            }
+            return {
+              ...r,
+              chain_status: "ANCHORED",
+              revoked_at:
+                onChain.revocationTimestamp > 0
+                  ? onChain.revocationTimestamp
+                  : null,
+            };
           } catch {
-            return r;
+            return { ...r, chain_status: "UNKNOWN", revoked_at: null };
           }
         }),
       );
