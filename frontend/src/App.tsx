@@ -11,6 +11,15 @@ import {
 } from "react-router-dom";
 import { ethers } from "ethers";
 import "./App.css";
+import {
+  certNumberOf,
+  outcomeMeta,
+  sameAddress,
+  sentence,
+  shortAddr,
+  txErrorMessage,
+  type Tone,
+} from "./utils";
 
 // Local dev talks to the backend directly.
 // Note: A production build sets VITE_API_BASE=/api.
@@ -77,56 +86,6 @@ interface VerificationLogRow {
 type AuthFetch = (url: string, init?: RequestInit) => Promise<Response>;
 
 /* ---------- Presentation helpers ---------- */
-
-type Tone = "ok" | "warn" | "bad";
-
-function outcomeMeta(result: string): {
-  tone: Tone;
-  title: string;
-  text: string;
-} {
-  switch (result) {
-    case "GENUINE_AND_ACTIVE":
-      return {
-        tone: "ok",
-        title: "Genuine and active",
-        text: "The details you entered match the record anchored on-chain.",
-      };
-    case "GENUINE_BUT_REVOKED":
-      return {
-        tone: "warn",
-        title: "Genuine but revoked",
-        text: "The details match, but the issuing institution has revoked this credential.",
-      };
-    default:
-      return {
-        tone: "bad",
-        title: "Mismatch or not found",
-        text: "No on-chain record matches these details. Check each field against the certificate.",
-      };
-  }
-}
-
-function sentence(s: string) {
-  const t = s.replace(/_/g, " ").toLowerCase();
-  return t.charAt(0).toUpperCase() + t.slice(1);
-}
-
-function shortAddr(a: string, head = 6, tail = 4) {
-  return `${a.slice(0, head)}...${a.slice(-tail)}`;
-}
-
-function sameAddress(a?: string | null, b?: string | null) {
-  return !!a && !!b && a.toLowerCase() === b.toLowerCase();
-}
-
-// Stored reference codes look like "UNIVA-220001624". Show only the certificate number.
-function certNumberOf(referenceCode: string, institutionCode: string) {
-  const prefix = `${institutionCode}-`;
-  return referenceCode.startsWith(prefix)
-    ? referenceCode.slice(prefix.length)
-    : referenceCode;
-}
 
 function ToneIcon({ tone, size = 24 }: { tone: Tone; size?: number }) {
   const common = {
@@ -347,16 +306,45 @@ function Header({
 }) {
   const path = useLocation().pathname;
   const area = areaFor(path);
+  // The phone menu remembers the page it was opened on, so it closes by itself
+  // as soon as the user navigates somewhere else.
+  const [menuOpenOn, setMenuOpenOn] = useState<string | null>(null);
+  const menuOpen = menuOpenOn === path;
+  const setMenuOpen = (open: boolean) => setMenuOpenOn(open ? path : null);
   const myInst = institutions.find(
     (i) =>
       sameAddress(i.wallet_address, walletAddress) &&
       i.accreditation_status === "ACCREDITED",
   );
-  const link = (to: string, active: boolean, label: string) => (
-    <Link to={to} className={`nav-link ${active ? "active" : ""}`}>
-      {label}
-    </Link>
-  );
+
+  useEffect(() => {
+    if (!menuOpen) return;
+    const onKey = (e: KeyboardEvent) => e.key === "Escape" && setMenuOpenOn(null);
+    document.addEventListener("keydown", onKey);
+    return () => document.removeEventListener("keydown", onKey);
+  }, [menuOpen]);
+
+  // The section links for the current role. Shown as tabs on wide screens and
+  // inside the menu on phones.
+  const sectionLinks: { to: string; active: boolean; label: string }[] =
+    area === "institution"
+      ? [
+          { to: "/register", active: path === "/register", label: "My institution" },
+          ...(myInst
+            ? [{
+                to: `/${myInst.code}/issue_degree`,
+                active: path.endsWith("/issue_degree"),
+                label: "Issue credentials",
+              }]
+            : []),
+        ]
+      : area === "admin"
+        ? [
+            { to: "/admin", active: path.startsWith("/admin"), label: "Applications" },
+            { to: "/logs", active: path.startsWith("/logs"), label: "Evaluation logs" },
+          ]
+        : [];
+  const showWallet = area === "institution" || area === "admin";
 
   return (
     <header className="topbar">
@@ -369,49 +357,125 @@ function Header({
           </span>
         </Link>
 
-        {area === "institution" && (
-          <nav className="nav" aria-label="Institution">
-            {link("/register", path === "/register", "My institution")}
-            {myInst &&
-              link(
-                `/${myInst.code}/issue_degree`,
-                path.endsWith("/issue_degree"),
-                "Issue credentials",
-              )}
-          </nav>
-        )}
-
-        {area === "admin" && (
-          <nav className="nav" aria-label="HEC admin">
-            {link("/admin", path.startsWith("/admin"), "Applications")}
-            {link("/logs", path.startsWith("/logs"), "Evaluation logs")}
+        {sectionLinks.length > 0 && (
+          <nav
+            className="nav"
+            aria-label={area === "admin" ? "HEC admin" : "Institution"}
+          >
+            {sectionLinks.map((l) => (
+              <Link
+                key={l.to}
+                to={l.to}
+                className={`nav-link ${l.active ? "active" : ""}`}
+              >
+                {l.label}
+              </Link>
+            ))}
           </nav>
         )}
 
         <div className="topbar-actions">
           {area === "verifier" && (
-            <Link to="/" className="btn btn-ghost btn-sm">
+            <Link to="/" className="btn btn-ghost btn-sm desktop-only">
               Institution or HEC sign in
             </Link>
           )}
-          {(area === "institution" || area === "admin") &&
+          {showWallet &&
             (walletAddress ? (
               <button
                 type="button"
-                className="wallet-pill"
+                className="wallet-pill desktop-only"
                 onClick={connectWallet}
                 title={`${walletAddress}. Click to switch MetaMask account`}
               >
                 {shortAddr(walletAddress)}
               </button>
             ) : (
-              <button className="btn btn-sm" onClick={connectWallet}>
+              <button
+                className="btn btn-sm desktop-only"
+                onClick={connectWallet}
+              >
                 Connect MetaMask
               </button>
             ))}
           <ThemeToggle theme={theme} onToggle={onToggleTheme} />
+          <button
+            type="button"
+            className="icon-btn menu-btn"
+            aria-expanded={menuOpen}
+            aria-controls="mobile-menu"
+            aria-label={menuOpen ? "Close menu" : "Open menu"}
+            onClick={() => setMenuOpen(!menuOpen)}
+          >
+            <svg
+              width="18"
+              height="18"
+              viewBox="0 0 24 24"
+              fill="none"
+              stroke="currentColor"
+              strokeWidth="2"
+              strokeLinecap="round"
+              aria-hidden="true"
+            >
+              {menuOpen ? (
+                <path d="M6 6l12 12M18 6L6 18" />
+              ) : (
+                <path d="M4 7h16M4 12h16M4 17h16" />
+              )}
+            </svg>
+          </button>
         </div>
       </div>
+
+      <nav
+        id="mobile-menu"
+        className="mobile-menu"
+        aria-label="Menu"
+        hidden={!menuOpen}
+      >
+        {sectionLinks.map((l) => (
+          <Link
+            key={l.to}
+            to={l.to}
+            className={`menu-link ${l.active ? "active" : ""}`}
+            aria-current={l.active ? "page" : undefined}
+          >
+            {l.label}
+          </Link>
+        ))}
+        {sectionLinks.length > 0 && <hr className="menu-divider" />}
+        <Link to="/about" className={`menu-link ${path === "/about" ? "active" : ""}`}>
+          About
+        </Link>
+        <Link to="/guide" className={`menu-link ${path === "/guide" ? "active" : ""}`}>
+          User guide
+        </Link>
+
+        {area === "verifier" && (
+          <Link to="/" className="btn btn-ghost menu-action">
+            Institution or HEC sign in
+          </Link>
+        )}
+        {showWallet && (
+          <div className="menu-wallet">
+            {walletAddress && (
+              <span className="wallet-pill" title={walletAddress}>
+                {shortAddr(walletAddress)}
+              </span>
+            )}
+            <button
+              type="button"
+              className="btn btn-sm menu-action"
+              onClick={() => {
+                setMenuOpen(false);
+                connectWallet();
+              }}
+            >
+              {walletAddress ? "Switch account" : "Connect MetaMask"}
+            </button>
+          </div>
+        )}
+      </nav>
     </header>
   );
 }
@@ -1484,20 +1548,7 @@ function IssueDegreePage({
       if (refreshTimer.current) clearTimeout(refreshTimer.current);
       refreshTimer.current = setTimeout(fetchUniversityCredentials, 4000);
     } catch (err: any) {
-      let msg: string | undefined;
-      if (err.code === "ACTION_REJECTED") {
-        msg =
-          "You rejected the transaction in MetaMask. Nothing was issued. Click the button to try again.";
-      } else if (err.code === "INSUFFICIENT_FUNDS") {
-        msg =
-          "Your account has no Sepolia ETH to pay the network fee. Get some from a Sepolia faucet, then try again.";
-      } else if (err.code === "CALL_EXCEPTION") {
-        msg =
-          "The blockchain rejected this transaction. This certificate number may already be issued. Check the list below, or try a different number.";
-      } else {
-        msg = err.shortMessage ?? err.message;
-      }
-      setIssueError(msg ?? "Issuance failed");
+      setIssueError(txErrorMessage(err));
     } finally {
       setIssuingLoading(false);
     }
@@ -2531,7 +2582,7 @@ function LogsPage({
     <>
       <PageHead title="Evaluation logs">
         Every verification attempt is recorded with its test scenario, outcome
-        and response time, ready for the Section 3.2.4 evaluation.
+        and response time, so you can review how the system performs.
       </PageHead>
 
       <div className="stats">

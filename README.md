@@ -149,10 +149,20 @@ The frontend reads the API address from `VITE_API_BASE` (default `http://localho
 ## Testing
 
 ```bash
-cd contracts && forge test
+cd contracts && forge test      # smart contract (Foundry)
+cd backend && npm test          # API, hashing, auth and logging (Vitest + supertest)
+cd frontend && npm test         # pages and helpers (Vitest + Testing Library)
 ```
 
-The Foundry suite covers HEC-only accreditation, rejection of unaccredited issuers, duplicate reference codes and hashes, issuer-only revocation, and suspension behaviour.
+None of the suites need PostgreSQL, Sepolia or a funded wallet. The backend and frontend tests replace the database, the blockchain and MetaMask with fakes.
+
+- **Contract:** HEC-only accreditation, rejection of unaccredited issuers, duplicate reference codes and hashes, issuer-only revocation, and suspension behaviour.
+- **Backend:** credential hashing and normalisation; wallet sign-in (forged tokens, wrong signer, reused nonce); institution self-registration and its validation; HEC approve and reject rules; issuing (reference code, hash, QR code, refusing numbers already on-chain, 503 when the chain is unreachable); the credential list's chain status; every verification outcome; and error handling (no internal error text sent to clients).
+- **Frontend:** the verify page (QR pre-fill, request body, genuine and mismatch results); registration (wallet required, field validation, the request sent); the issuing portal (status badges and when Revoke is offered, wrong-wallet and pending gates); HEC admin and logs; and the helper functions.
+
+## Logging
+
+The backend writes one line per event to stdout and stderr, which pm2 stores in `~/.pm2/logs/` (`pm2 logs <name>` to follow them). Every request is logged with its status and duration. An unexpected error is logged with its stack trace and a short reference id. The client receives only a generic message containing that id, so a user can report it and you can search the log for it. Set `LOG_LEVEL` to `debug`, `info` (default), `warn`, `error` or `silent`.
 
 To summarise the evaluation runs recorded by the verifier (HEC admin can also see them at `/logs`):
 

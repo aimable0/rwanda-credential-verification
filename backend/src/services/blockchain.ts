@@ -1,5 +1,6 @@
 import { ethers } from "ethers";
 import dotenv from "dotenv";
+import { logger } from "../logger";
 
 dotenv.config();
 
@@ -14,7 +15,7 @@ const rpcUrl = process.env.SEPOLIA_RPC_URL;
 const contractAddress = process.env.CONTRACT_ADDRESS;
 
 if (!rpcUrl || !contractAddress) {
-  console.warn("Warning: SEPOLIA_RPC_URL or CONTRACT_ADDRESS missing in .env");
+  logger.warn("SEPOLIA_RPC_URL or CONTRACT_ADDRESS missing in .env");
 }
 
 export const provider = new ethers.JsonRpcProvider(rpcUrl);

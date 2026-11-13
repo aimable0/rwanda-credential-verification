@@ -14,6 +14,7 @@ import { ethers } from "ethers";
 import { Request, Response, NextFunction } from "express";
 import { query } from "./db"; // adjust the path or extension to match your other imports
 import { getHecAddress } from "./services/blockchain";
+import { logger, sendServerError } from "./logger";
 
 const NONCE_TTL_MS = 5 * 60 * 1000;
 const TOKEN_TTL_MS = 2 * 60 * 60 * 1000;
@@ -21,7 +22,7 @@ const TOKEN_TTL_MS = 2 * 60 * 60 * 1000;
 const SECRET =
   process.env.AUTH_SECRET ??
   (() => {
-    console.warn(
+    logger.warn(
       "AUTH_SECRET missing in .env. Using a temporary secret, so logins reset when the server restarts.",
     );
     return crypto.randomBytes(32).toString("hex");
@@ -124,8 +125,8 @@ export async function requireHec(req: AuthedRequest, res: Response, next: NextFu
       return res.status(403).json({ error: "Only the HEC wallet can do this" });
     }
     next();
-  } catch (err: any) {
-    res.status(500).json({ error: `Could not read the HEC address: ${err.message}` });
+  } catch (err) {
+    sendServerError(req, res, err);
   }
 }
 
@@ -156,8 +157,8 @@ export function requireInstitutionOwner(getCode: (req: Request) => string | unde
           .json({ error: "This wallet is not the registrar for that institution" });
       }
       next();
-    } catch (err: any) {
-      res.status(500).json({ error: err.message });
+    } catch (err) {
+      sendServerError(req, res, err);
     }
   };
 }
